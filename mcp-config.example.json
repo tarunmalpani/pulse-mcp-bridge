@@ -1,0 +1,48 @@
+{
+  "_comment": "Example MCP client configuration for pulse-mcp. Copy the relevant block into your client's config file.",
+
+  "cursor_example": {
+    "_file": ".cursor/mcp.json",
+    "mcpServers": {
+      "pulse-mcp": {
+        "command": "node",
+        "args": ["/absolute/path/to/pulse-mcp-bridge/index.js"],
+        "env": {
+          "MOBILE_PHONE_IP": "192.168.1.42"
+        }
+      }
+    }
+  },
+
+  "claude_desktop_example": {
+    "_file": "claude_desktop_config.json",
+    "mcpServers": {
+      "pulse-mcp": {
+        "command": "node",
+        "args": ["/absolute/path/to/pulse-mcp-bridge/index.js"],
+        "env": {
+          "MOBILE_PHONE_IP": "192.168.1.42"
+        }
+      }
+    }
+  },
+
+  "windsurf_example": {
+    "_file": "~/.codeium/windsurf/mcp_config.json",
+    "mcpServers": {
+      "pulse-mcp": {
+        "command": "node",
+        "args": ["/absolute/path/to/pulse-mcp-bridge/index.js"],
+        "env": {
+          "MOBILE_PHONE_IP": "192.168.1.42"
+        }
+      }
+    }
+  },
+
+  "notes": [
+    "Replace /absolute/path/to/pulse-mcp-bridge/index.js with the real path on your machine.",
+    "MOBILE_PHONE_IP should be the local Wi-Fi IP address of the phone running the mobile app (see mobile-app-server.js).",
+    "If you installed pulse-mcp globally via npm link / npm i -g, you can use \"command\": \"pulse-mcp\" instead of node + args."
+  ]
+}
