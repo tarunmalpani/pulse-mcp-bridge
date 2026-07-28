@@ -52,7 +52,7 @@ useEffect(() => {
 
 Make sure your phone and dev machine are on the same Wi-Fi network.
 
-**Note:** This template has not yet been verified against a real device/app — validate the `react-native-http-bridge-refurbished` and `react-native-device-info` integration in your own RN/Expo project before relying on it.
+**Verified:** this integration has been tested end-to-end against a real Expo/React Native app running on the iOS Simulator (Expo SDK 51 / RN 0.74), including a live crash scenario — the bridge correctly goes unreachable when the app stops responding. Android has not been tested yet.
 
 ## Available MCP tools
 

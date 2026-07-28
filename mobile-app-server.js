@@ -16,7 +16,7 @@
  * Set MOBILE_PHONE_IP on the MCP server side to this device's local IP.
  */
 
-import httpBridge from "react-native-http-bridge-refurbished";
+import { BridgeServer } from "react-native-http-bridge-refurbished";
 import { Platform } from "react-native";
 import DeviceInfo from "react-native-device-info"; // npm install react-native-device-info
 
@@ -45,42 +45,35 @@ export function setCurrentRoute(routeName) {
 
 // --- Server bootstrap ----------------------------------------------------
 
+let serverInstance = null;
+
 export function startPulseServer() {
-  httpBridge.start(PORT, "pulse_mcp_service", async (request, response) => {
-    const { url, type } = request;
+  const server = new BridgeServer("pulse_mcp_service", __DEV__);
 
-    if (type !== "GET") {
-      httpBridge.respond(response, 405, "application/json", {
-        error: "Method not allowed",
-      });
-      return;
-    }
-
-    if (url === "/status" || url.startsWith("/status?")) {
-      const batteryLevel = await DeviceInfo.getBatteryLevel();
-      const payload = {
-        status: "online",
-        batteryLevel: `${Math.round(batteryLevel * 100)}%`,
-        platform: Platform.OS,
-        activeRoute: currentRouteName,
-      };
-      httpBridge.respond(response, 200, "application/json", payload);
-      return;
-    }
-
-    if (url === "/logs" || url.startsWith("/logs?")) {
-      httpBridge.respond(response, 200, "application/json", {
-        logs: recentLogs,
-      });
-      return;
-    }
-
-    httpBridge.respond(response, 404, "application/json", {
-      error: "Not found",
+  server.get("/status", async (request, response) => {
+    const batteryLevel = await DeviceInfo.getBatteryLevel();
+    response.json({
+      status: "online",
+      batteryLevel: `${Math.round(batteryLevel * 100)}%`,
+      platform: Platform.OS,
+      activeRoute: currentRouteName,
     });
   });
 
+  server.get("/logs", (request, response) => {
+    response.json({ logs: recentLogs });
+  });
+
+  server.listen(PORT);
+  serverInstance = server;
+
   console.log(`PulseMCP bridge listening on http://0.0.0.0:${PORT}`);
+}
+
+/** Stops the bridge server, e.g. during teardown or a controlled restart. */
+export function stopPulseServer() {
+  serverInstance?.stop();
+  serverInstance = null;
 }
 
 /**
