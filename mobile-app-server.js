@@ -8,10 +8,12 @@
  * Dependencies:
  *   npm install react-native-http-bridge-refurbished react-native-view-shot
  *
- * This exposes three routes on port 8080:
+ * This exposes five routes on port 8080:
  *   GET /status     -> current battery level, active route, and platform info
  *   GET /logs       -> recent captured console logs / network errors
  *   GET /screenshot -> live screenshot of the current screen (base64 PNG)
+ *   GET /session    -> the current bug-report step recording, if any (see recordStep below)
+ *   GET /reports    -> all saved bug reports (auto-snapshotted every time recording stops)
  *
  * NOTE: Your phone and your dev machine must be on the same Wi-Fi network.
  * Set MOBILE_PHONE_IP on the MCP server side to this device's local IP.
@@ -45,6 +47,72 @@ export function setCurrentRoute(routeName) {
   currentRouteName = routeName;
 }
 
+// --- Bug-report step recording -------------------------------------------
+// A tester taps "Start Recording", performs the steps that reproduce a bug,
+// then taps "Stop Recording". get_bug_report returns the exact numbered
+// sequence of what they did, so there's no manual repro-steps writeup.
+
+let isRecording = false;
+let sessionSteps = [];
+let stepCounter = 0;
+const savedReports = [];
+let reportIdCounter = 0;
+
+export function isSessionRecording() {
+  return isRecording;
+}
+
+export function startSessionRecording() {
+  isRecording = true;
+  sessionSteps = [];
+  stepCounter = 0;
+  recordLog('[Session] Recording started');
+}
+
+/**
+ * Stops recording and auto-saves everything captured (steps + full log
+ * buffer + a device-info snapshot) as one shareable report. Returns the
+ * saved report so the caller can navigate straight to its detail screen.
+ */
+export async function stopSessionRecording() {
+  isRecording = false;
+  const batteryLevel = await DeviceInfo.getBatteryLevel().catch(() => -1);
+  reportIdCounter += 1;
+  const report = {
+    id: reportIdCounter,
+    stoppedAt: new Date().toISOString(),
+    steps: [...sessionSteps],
+    logs: [...recentLogs],
+    deviceInfo: {
+      platform: Platform.OS,
+      osVersion: DeviceInfo.getSystemVersion(),
+      appVersion: DeviceInfo.getVersion(),
+      buildNumber: DeviceInfo.getBuildNumber(),
+      batteryLevel: `${Math.round(batteryLevel * 100)}%`,
+      activeRoute: currentRouteName,
+    },
+  };
+  savedReports.unshift(report);
+  recordLog('[Session] Recording stopped - report saved');
+  return report;
+}
+
+/** Call alongside recordLog at any point you want captured as a numbered repro step. */
+export function recordStep(description) {
+  if (!isRecording) return;
+  stepCounter += 1;
+  sessionSteps.push({
+    step: stepCounter,
+    description,
+    timestamp: new Date().toISOString(),
+  });
+}
+
+/** All auto-saved reports, most recent first. */
+export function getSavedReports() {
+  return savedReports;
+}
+
 // --- Server bootstrap ----------------------------------------------------
 
 let serverInstance = null;
@@ -58,6 +126,9 @@ export function startPulseServer() {
       status: "online",
       batteryLevel: `${Math.round(batteryLevel * 100)}%`,
       platform: Platform.OS,
+      osVersion: DeviceInfo.getSystemVersion(),
+      appVersion: DeviceInfo.getVersion(),
+      buildNumber: DeviceInfo.getBuildNumber(),
       activeRoute: currentRouteName,
     });
   });
@@ -69,6 +140,14 @@ export function startPulseServer() {
   server.get("/screenshot", async (request, response) => {
     const base64 = await captureScreen({ format: "png", quality: 0.8, result: "base64" });
     response.json({ image: base64, mimeType: "image/png" });
+  });
+
+  server.get("/session", (request, response) => {
+    response.json({ recording: isRecording, steps: sessionSteps });
+  });
+
+  server.get("/reports", (request, response) => {
+    response.json({ reports: savedReports });
   });
 
   server.listen(PORT);
@@ -86,7 +165,10 @@ export function stopPulseServer() {
 /**
  * Example integration in App.tsx:
  *
- *   import { startPulseServer, setCurrentRoute, recordLog } from "./pulseServer";
+ *   import {
+ *     startPulseServer, setCurrentRoute, recordLog,
+ *     startSessionRecording, stopSessionRecording, recordStep, isSessionRecording,
+ *   } from "./pulseServer";
  *
  *   useEffect(() => {
  *     if (__DEV__) startPulseServer();
@@ -99,4 +181,9 @@ export function stopPulseServer() {
  *
  *   // Anywhere you catch an error or log a network failure:
  *   recordLog(`[Network Error] ${error.message}`);
+ *
+ *   // Bug-report recording - wire a "Start/Stop Recording" toggle to these,
+ *   // then call recordStep(...) at any point worth capturing as a repro step:
+ *   recordStep("Tapped 'Sync Now' on Dashboard");
+ *   recordStep("Sync failed: request timed out after 3000ms");
  */

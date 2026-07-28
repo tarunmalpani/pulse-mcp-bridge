@@ -49,7 +49,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "get_mobile_device_status",
         description:
-          "Fetches active mobile device battery level, current route/screen name, and OS/platform telemetry from the running mobile app.",
+          "Fetches active mobile device battery level, current route/screen name, OS version, app version/build number, and platform telemetry from the running mobile app.",
         inputSchema: {
           type: "object",
           properties: {},
@@ -77,6 +77,24 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         name: "get_mobile_screenshot",
         description:
           "Captures and returns a live screenshot of whatever screen is currently showing on the running mobile app.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
+      {
+        name: "get_bug_report",
+        description:
+          "Retrieves the numbered sequence of steps a tester recorded on the device (via a Start/Stop Recording toggle in the app), for reproducing and diagnosing a bug without a manual writeup.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
+      {
+        name: "get_saved_bug_reports",
+        description:
+          "Lists all bug reports previously saved on the device (one auto-saved every time Stop Recording is tapped), each with its full steps, logs, and device info snapshot.",
         inputSchema: {
           type: "object",
           properties: {},
@@ -126,6 +144,61 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { image, mimeType } = await fetchFromPhone("/screenshot");
       return {
         content: [{ type: "image", data: image, mimeType }],
+      };
+    }
+
+    if (name === "get_bug_report") {
+      const session = await fetchFromPhone("/session");
+      if (!session.steps || session.steps.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: session.recording
+                ? "Recording is active but no steps have been captured yet."
+                : "No bug report recorded. Tap 'Start Recording' in the app, reproduce the issue, then tap 'Stop Recording'.",
+            },
+          ],
+        };
+      }
+      const lastStep = session.steps[session.steps.length - 1];
+      const looksLikeFailure = /error|fail|fatal|exception/i.test(
+        lastStep.description
+      );
+      const status = await fetchFromPhone("/status").catch(() => null);
+      const report = {
+        recording: session.recording,
+        totalSteps: session.steps.length,
+        steps: session.steps,
+        likelyFailurePoint: looksLikeFailure ? lastStep : null,
+        deviceContext: status
+          ? {
+              platform: status.platform,
+              osVersion: status.osVersion,
+              appVersion: status.appVersion,
+              buildNumber: status.buildNumber,
+            }
+          : null,
+      };
+      return {
+        content: [{ type: "text", text: JSON.stringify(report, null, 2) }],
+      };
+    }
+
+    if (name === "get_saved_bug_reports") {
+      const { reports } = await fetchFromPhone("/reports");
+      if (!reports || reports.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "No saved bug reports yet. Reports are auto-saved every time 'Stop Recording' is tapped in the app.",
+            },
+          ],
+        };
+      }
+      return {
+        content: [{ type: "text", text: JSON.stringify({ reports }, null, 2) }],
       };
     }
 

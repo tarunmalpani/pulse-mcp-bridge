@@ -62,6 +62,12 @@ Make sure your phone and dev machine are on the same Wi-Fi network.
 | `get_mobile_app_logs` | Recent console logs / network errors captured in the app |
 | `get_standup_snapshot` | Combines live device status with today's local git commits (falls back gracefully outside a git repo) |
 | `get_mobile_screenshot` | Live screenshot of whatever screen is currently showing on the app, returned as an inline image |
+| `get_bug_report` | The current/live step recording (see below) plus device context, for reproducing a bug in progress |
+| `get_saved_bug_reports` | All bug reports auto-saved on the device, each with its full steps, logs, and device info snapshot |
+
+### Bug-report step recording
+
+Wire a "Start/Stop Recording" toggle in your app to `startSessionRecording()` / `stopSessionRecording()`, and call `recordStep(...)` at any point worth capturing (button taps, network results, errors). When recording stops, a complete report — numbered steps, full logs, and a device/build info snapshot — is auto-saved and instantly queryable via `get_bug_report` / `get_saved_bug_reports`. No manual "steps to reproduce" writeup needed.
 
 ## Environment variables
 
