@@ -5,12 +5,13 @@
  * and call `startPulseServer()` once, early in your app's lifecycle (e.g. in App.tsx
  * after your navigation container mounts), so the IDE-side MCP tool can reach it.
  *
- * Dependency:
- *   npm install react-native-http-bridge-refurbished
+ * Dependencies:
+ *   npm install react-native-http-bridge-refurbished react-native-view-shot
  *
- * This exposes two routes on port 8080:
- *   GET /status  -> current battery level, active route, and platform info
- *   GET /logs    -> recent captured console logs / network errors
+ * This exposes three routes on port 8080:
+ *   GET /status     -> current battery level, active route, and platform info
+ *   GET /logs       -> recent captured console logs / network errors
+ *   GET /screenshot -> live screenshot of the current screen (base64 PNG)
  *
  * NOTE: Your phone and your dev machine must be on the same Wi-Fi network.
  * Set MOBILE_PHONE_IP on the MCP server side to this device's local IP.
@@ -19,6 +20,7 @@
 import { BridgeServer } from "react-native-http-bridge-refurbished";
 import { Platform } from "react-native";
 import DeviceInfo from "react-native-device-info"; // npm install react-native-device-info
+import { captureScreen } from "react-native-view-shot"; // npm install react-native-view-shot
 
 const PORT = 8080;
 
@@ -62,6 +64,11 @@ export function startPulseServer() {
 
   server.get("/logs", (request, response) => {
     response.json({ logs: recentLogs });
+  });
+
+  server.get("/screenshot", async (request, response) => {
+    const base64 = await captureScreen({ format: "png", quality: 0.8, result: "base64" });
+    response.json({ image: base64, mimeType: "image/png" });
   });
 
   server.listen(PORT);

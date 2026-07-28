@@ -73,6 +73,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {},
         },
       },
+      {
+        name: "get_mobile_screenshot",
+        description:
+          "Captures and returns a live screenshot of whatever screen is currently showing on the running mobile app.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
     ],
   };
 });
@@ -110,6 +119,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const logs = await fetchFromPhone("/logs");
       return {
         content: [{ type: "text", text: JSON.stringify(logs, null, 2) }],
+      };
+    }
+
+    if (name === "get_mobile_screenshot") {
+      const { image, mimeType } = await fetchFromPhone("/screenshot");
+      return {
+        content: [{ type: "image", data: image, mimeType }],
       };
     }
 

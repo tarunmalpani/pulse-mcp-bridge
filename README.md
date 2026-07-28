@@ -37,7 +37,7 @@ See `mcp-config.example.json` for ready-to-paste config blocks for Cursor, Claud
 Copy `mobile-app-server.js` into your React Native / Expo app (e.g. `src/pulseServer.js`) and follow the integration comments at the top of the file:
 
 ```bash
-npm install react-native-http-bridge-refurbished react-native-device-info
+npm install react-native-http-bridge-refurbished react-native-device-info react-native-view-shot
 ```
 
 Then in `App.tsx`:
@@ -61,6 +61,7 @@ Make sure your phone and dev machine are on the same Wi-Fi network.
 | `get_mobile_device_status` | Battery level, active route/screen, OS/platform from the running app |
 | `get_mobile_app_logs` | Recent console logs / network errors captured in the app |
 | `get_standup_snapshot` | Combines live device status with today's local git commits (falls back gracefully outside a git repo) |
+| `get_mobile_screenshot` | Live screenshot of whatever screen is currently showing on the app, returned as an inline image |
 
 ## Environment variables
 
