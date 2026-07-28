@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   SafeAreaView,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -12,6 +13,7 @@ import { StatusBar as ExpoStatusBar } from "expo-status-bar";
 import * as Clipboard from "expo-clipboard";
 import {
   startPulseServer,
+  stopPulseServer,
   setCurrentRoute,
   recordLog,
   startSessionRecording,
@@ -52,16 +54,10 @@ const PROMPT_GROUPS = [
   },
 ];
 
-const SCREENS = [
-  { id: "HomeScreen", label: "Home" },
-  { id: "DashboardScreen", label: "Dashboard" },
-  { id: "SettingsScreen", label: "Settings" },
-];
-
 const TABS = [
-  { id: "home", label: "Home", icon: "⌂" },
-  { id: "log", label: "Log", icon: "▤" },
-  { id: "ask", label: "Ask IDE", icon: "▷" },
+  { id: "home", label: "Home", icon: "⌂", routeId: "HomeScreen" },
+  { id: "log", label: "Log", icon: "▤", routeId: "LogScreen" },
+  { id: "ask", label: "Ask IDE", icon: "▷", routeId: "AskIdeScreen" },
 ];
 
 const PALETTE = {
@@ -173,30 +169,42 @@ function StatusPill({ theme, color, label }) {
   );
 }
 
-function ScreenHeader({ theme, title, subtitle }) {
+function ScreenHeader({ theme, title, subtitle, bridgeOnline }) {
   return (
     <View style={styles.header}>
       <View>
         <Text style={[styles.title, { color: theme.text }]}>{title}</Text>
         <Text style={[styles.tagline, { color: theme.textMuted }]}>{subtitle}</Text>
       </View>
-      <StatusPill theme={theme} color={theme.success} label="Bridge online" />
+      <StatusPill
+        theme={theme}
+        color={bridgeOnline ? theme.success : theme.danger}
+        label={bridgeOnline ? "Bridge online" : "Bridge offline"}
+      />
     </View>
   );
 }
 
-function HomeTab({ theme, route, recording, stepCount, goToScreen, logSuccess, logNetworkError, toggleRecording }) {
+function HomeTab({
+  theme,
+  activeTabLabel,
+  recording,
+  stepCount,
+  bridgeOnline,
+  logSuccess,
+  logNetworkError,
+  toggleRecording,
+  toggleBridge,
+}) {
   return (
     <>
-      <ScreenHeader theme={theme} title="PulseMCP" subtitle="Live device bridge · port 8080" />
+      <ScreenHeader theme={theme} title="PulseMCP" subtitle="Live device bridge · port 8080" bridgeOnline={bridgeOnline} />
 
       <Card theme={theme} style={{ marginTop: 20 }}>
         <View style={styles.statusRow}>
           <View style={styles.statusItem}>
             <Text style={[styles.statusLabel, { color: theme.textFaint }]}>ACTIVE SCREEN</Text>
-            <Text style={[styles.statusValue, { color: theme.text }]}>
-              {SCREENS.find((s) => s.id === route)?.label}
-            </Text>
+            <Text style={[styles.statusValue, { color: theme.text }]}>{activeTabLabel}</Text>
           </View>
           <View style={[styles.statusDivider, { backgroundColor: theme.border }]} />
           <View style={styles.statusItem}>
@@ -213,22 +221,43 @@ function HomeTab({ theme, route, recording, stepCount, goToScreen, logSuccess, l
         </View>
       </Card>
 
-      <SectionLabel theme={theme}>NAVIGATE</SectionLabel>
-      <View style={[styles.segmented, { backgroundColor: theme.track }]}>
-        {SCREENS.map((s) => {
-          const active = route === s.id;
-          return (
-            <TouchableOpacity
-              key={s.id}
-              activeOpacity={0.8}
-              style={[styles.segment, active && { backgroundColor: theme.card, shadowColor: theme.shadow, shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 1 }]}
-              onPress={() => goToScreen(s.id, s.label)}
-            >
-              <Text style={[styles.segmentText, { color: active ? theme.text : theme.textMuted }]}>{s.label}</Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
+      <SectionLabel theme={theme}>BRIDGE CONTROL</SectionLabel>
+      <TouchableOpacity activeOpacity={0.9} onPress={toggleBridge}>
+        <Card
+          theme={theme}
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            borderColor: bridgeOnline ? theme.border : theme.danger,
+          }}
+        >
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+            <View style={[styles.liveDot, { width: 10, height: 10, borderRadius: 5, backgroundColor: bridgeOnline ? theme.success : theme.danger }]} />
+            <View>
+              <Text style={[styles.recordTitle, { color: theme.text }]}>
+                {bridgeOnline ? "Bridge is online" : "Bridge is offline"}
+              </Text>
+              <Text style={[styles.actionSubtitle, { color: theme.textMuted }]}>
+                {bridgeOnline ? "Tap to take it offline for testing" : "Tap to bring it back online"}
+              </Text>
+            </View>
+          </View>
+          <View
+            style={[
+              styles.toggleTrack,
+              { backgroundColor: bridgeOnline ? theme.success : theme.track },
+            ]}
+          >
+            <View
+              style={[
+                styles.toggleThumb,
+                { backgroundColor: theme.card, alignSelf: bridgeOnline ? "flex-end" : "flex-start" },
+              ]}
+            />
+          </View>
+        </Card>
+      </TouchableOpacity>
 
       <SectionLabel theme={theme}>SIMULATE ACTIVITY</SectionLabel>
       <View style={styles.actionRow}>
@@ -287,10 +316,125 @@ function HomeTab({ theme, route, recording, stepCount, goToScreen, logSuccess, l
   );
 }
 
-function LogTab({ theme, recording, steps, events, savedReportCount, eventDot }) {
+function reportToText(report) {
+  const lines = [
+    `Bug Report #${report.id}`,
+    new Date(report.stoppedAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }),
+    "",
+    `Device: ${report.deviceInfo?.platform ?? "?"} ${report.deviceInfo?.osVersion ?? ""} · app v${report.deviceInfo?.appVersion ?? "?"} (${report.deviceInfo?.buildNumber ?? "?"})`,
+    `Screen: ${report.deviceInfo?.activeRoute ?? "Unknown"} · Battery: ${report.deviceInfo?.batteryLevel ?? "—"}`,
+    "",
+    `Steps to reproduce (${report.steps.length}):`,
+    ...report.steps.map((s) => `${s.step}. ${s.description}`),
+    "",
+    `Logs (${report.logs.length}):`,
+    ...report.logs.map((l) => `[${l.level}] ${l.source}: ${l.message}`),
+  ];
+  return lines.join("\n");
+}
+
+function ReportDetail({ theme, report, onBack }) {
+  function share() {
+    Share.share({
+      title: `Bug Report #${report.id}`,
+      message: reportToText(report),
+    });
+  }
+
   return (
     <>
-      <ScreenHeader theme={theme} title="Log" subtitle="What the app has done, in order" />
+      <View style={styles.detailHeaderRow}>
+        <TouchableOpacity activeOpacity={0.7} onPress={onBack} style={styles.backRow}>
+          <Text style={[styles.backChevron, { color: theme.accent }]}>‹</Text>
+          <Text style={[styles.backLabel, { color: theme.accent }]}>All reports</Text>
+        </TouchableOpacity>
+        <TouchableOpacity activeOpacity={0.7} onPress={share} style={[styles.shareButton, { backgroundColor: theme.track }]}>
+          <Text style={[styles.shareIcon, { color: theme.accent }]}>⬆</Text>
+        </TouchableOpacity>
+      </View>
+
+      <Text style={[styles.title, { color: theme.text, fontSize: 22, marginTop: 12 }]}>Report #{report.id}</Text>
+      <Text style={[styles.tagline, { color: theme.textMuted }]}>
+        {new Date(report.stoppedAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}
+      </Text>
+
+      <SectionLabel theme={theme}>DEVICE AT TIME OF REPORT</SectionLabel>
+      <Card theme={theme}>
+        <View style={styles.statusRow}>
+          <View style={styles.statusItem}>
+            <Text style={[styles.statusLabel, { color: theme.textFaint }]}>SCREEN</Text>
+            <Text style={[styles.statusValue, { color: theme.text }]}>{report.deviceInfo?.activeRoute ?? "Unknown"}</Text>
+          </View>
+          <View style={[styles.statusDivider, { backgroundColor: theme.border }]} />
+          <View style={styles.statusItem}>
+            <Text style={[styles.statusLabel, { color: theme.textFaint }]}>BATTERY</Text>
+            <Text style={[styles.statusValue, { color: theme.text }]}>{report.deviceInfo?.batteryLevel ?? "—"}</Text>
+          </View>
+        </View>
+      </Card>
+
+      <SectionLabel theme={theme}>REPRO STEPS ({report.steps.length})</SectionLabel>
+      <Card theme={theme} style={{ padding: 0, overflow: "hidden" }}>
+        {report.steps.length === 0 ? (
+          <Text style={[styles.emptyState, { color: theme.textFaint }]}>No steps were captured in this recording.</Text>
+        ) : (
+          report.steps.map((s, i) => (
+            <View
+              key={s.step}
+              style={[
+                styles.stepRow,
+                i !== report.steps.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.border },
+              ]}
+            >
+              <View style={[styles.stepBadge, { backgroundColor: theme.accentSoft }]}>
+                <Text style={[styles.stepBadgeText, { color: theme.accent }]}>{s.step}</Text>
+              </View>
+              <Text style={[styles.eventMessage, { color: theme.text }]}>{s.description}</Text>
+            </View>
+          ))
+        )}
+      </Card>
+
+      <SectionLabel theme={theme}>LOGS AT TIME OF REPORT ({report.logs.length})</SectionLabel>
+      <Card theme={theme} style={{ padding: 0, overflow: "hidden" }}>
+        {report.logs.length === 0 ? (
+          <Text style={[styles.emptyState, { color: theme.textFaint }]}>No logs were captured in this recording.</Text>
+        ) : (
+          report.logs.map((l, i) => (
+            <View
+              key={l.id}
+              style={[
+                styles.eventRow,
+                i !== report.logs.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.border },
+              ]}
+            >
+              <View
+                style={[
+                  styles.eventDot,
+                  { backgroundColor: l.level === "error" ? theme.danger : l.level === "success" ? theme.success : theme.textFaint },
+                ]}
+              />
+              <Text style={[styles.eventMessage, { color: theme.text }]} numberOfLines={1}>
+                {l.message}
+              </Text>
+            </View>
+          ))
+        )}
+      </Card>
+    </>
+  );
+}
+
+function LogTab({ theme, recording, steps, events, savedReports, eventDot, bridgeOnline }) {
+  const [selectedReport, setSelectedReport] = useState(null);
+
+  if (selectedReport) {
+    return <ReportDetail theme={theme} report={selectedReport} onBack={() => setSelectedReport(null)} />;
+  }
+
+  return (
+    <>
+      <ScreenHeader theme={theme} title="Log" subtitle="What the app has done, in order" bridgeOnline={bridgeOnline} />
 
       <SectionLabel theme={theme} style={{ marginTop: 20 }}>
         RECORDED STEPS {recording ? "· recording" : ""}
@@ -319,11 +463,39 @@ function LogTab({ theme, recording, steps, events, savedReportCount, eventDot })
           ))
         )}
       </Card>
-      {savedReportCount > 0 ? (
-        <Text style={[styles.footer, { color: theme.textFaint, marginTop: 10, textAlign: "left" }]}>
-          {savedReportCount} bug report{savedReportCount === 1 ? "" : "s"} saved on this device.
-        </Text>
-      ) : null}
+
+      <SectionLabel theme={theme}>SAVED REPORTS ({savedReports.length})</SectionLabel>
+      <Card theme={theme} style={{ padding: 0, overflow: "hidden" }}>
+        {savedReports.length === 0 ? (
+          <Text style={[styles.emptyState, { color: theme.textFaint }]}>
+            Stop a recording on the Home tab to save your first report here.
+          </Text>
+        ) : (
+          savedReports.map((r, i) => (
+            <TouchableOpacity
+              key={r.id}
+              activeOpacity={0.7}
+              onPress={() => setSelectedReport(r)}
+              style={[
+                styles.reportRow,
+                i !== savedReports.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.border },
+              ]}
+            >
+              <View style={[styles.stepBadge, { backgroundColor: theme.accentSoft }]}>
+                <Text style={[styles.stepBadgeText, { color: theme.accent }]}>{r.id}</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.recordTitle, { color: theme.text, fontSize: 14 }]}>Report #{r.id}</Text>
+                <Text style={[styles.actionSubtitle, { color: theme.textMuted }]}>
+                  {r.steps.length} step{r.steps.length === 1 ? "" : "s"} ·{" "}
+                  {new Date(r.stoppedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </Text>
+              </View>
+              <Text style={[styles.chevron, { color: theme.textFaint }]}>›</Text>
+            </TouchableOpacity>
+          ))
+        )}
+      </Card>
 
       <SectionLabel theme={theme}>ACTIVITY</SectionLabel>
       <Card theme={theme} style={{ padding: 0, overflow: "hidden" }}>
@@ -355,10 +527,10 @@ function LogTab({ theme, recording, steps, events, savedReportCount, eventDot })
   );
 }
 
-function AskIdeTab({ theme }) {
+function AskIdeTab({ theme, bridgeOnline }) {
   return (
     <>
-      <ScreenHeader theme={theme} title="Ask IDE" subtitle="Tap to copy a prompt for your MCP client" />
+      <ScreenHeader theme={theme} title="Ask IDE" subtitle="Tap to copy a prompt for your MCP client" bridgeOnline={bridgeOnline} />
       <View style={{ marginTop: 20 }}>
         {PROMPT_GROUPS.map((group) => (
           <View key={group.label} style={{ marginBottom: 20 }}>
@@ -379,14 +551,17 @@ function AskIdeTab({ theme }) {
 export default function App() {
   const theme = useTheme();
   const [activeTab, setActiveTab] = useState("home");
-  const [route, setRoute] = useState(SCREENS[0].id);
   const [recording, setRecording] = useState(false);
   const [steps, setSteps] = useState([]);
-  const [savedReportCount, setSavedReportCount] = useState(0);
+  const [savedReports, setSavedReports] = useState([]);
   const [events, setEvents] = useState([]);
+  const [bridgeOnline, setBridgeOnline] = useState(true);
+
+  const activeTabMeta = TABS.find((t) => t.id === activeTab);
 
   useEffect(() => {
     if (__DEV__) startPulseServer();
+    setCurrentRoute(activeTabMeta.routeId);
   }, []);
 
   const pushEvent = (kind, message) =>
@@ -398,11 +573,12 @@ export default function App() {
     setSteps((prev) => [...prev, { step: prev.length + 1, description }]);
   }
 
-  function goToScreen(id, label) {
-    setRoute(id);
-    setCurrentRoute(id);
-    pushStep(`Navigated to ${label}`);
-    pushEvent("nav", `Navigated to ${label}`);
+  function selectTab(tab) {
+    if (tab.id === activeTab) return;
+    setActiveTab(tab.id);
+    setCurrentRoute(tab.routeId);
+    pushStep(`Navigated to ${tab.label}`);
+    pushEvent("nav", `Navigated to ${tab.label}`);
   }
 
   function logSuccess() {
@@ -426,9 +602,21 @@ export default function App() {
     } else {
       stopSessionRecording().then((report) => {
         setRecording(false);
-        setSavedReportCount((c) => c + 1);
+        setSavedReports((prev) => [report, ...prev]);
         pushEvent("record", `Report #${report.id} saved · ${report.steps.length} steps`);
       });
+    }
+  }
+
+  function toggleBridge() {
+    if (bridgeOnline) {
+      stopPulseServer();
+      setBridgeOnline(false);
+      pushEvent("bridge", "Bridge taken offline");
+    } else {
+      startPulseServer();
+      setBridgeOnline(true);
+      pushEvent("bridge", "Bridge brought back online");
     }
   }
 
@@ -438,6 +626,7 @@ export default function App() {
       error: theme.danger,
       nav: theme.accent,
       record: theme.danger,
+      bridge: theme.accent,
     }),
     [theme]
   );
@@ -449,13 +638,14 @@ export default function App() {
         {activeTab === "home" && (
           <HomeTab
             theme={theme}
-            route={route}
+            activeTabLabel={activeTabMeta.label}
             recording={recording}
             stepCount={steps.length}
-            goToScreen={goToScreen}
+            bridgeOnline={bridgeOnline}
             logSuccess={logSuccess}
             logNetworkError={logNetworkError}
             toggleRecording={toggleRecording}
+            toggleBridge={toggleBridge}
           />
         )}
         {activeTab === "log" && (
@@ -464,11 +654,12 @@ export default function App() {
             recording={recording}
             steps={steps}
             events={events}
-            savedReportCount={savedReportCount}
+            savedReports={savedReports}
             eventDot={eventDot}
+            bridgeOnline={bridgeOnline}
           />
         )}
-        {activeTab === "ask" && <AskIdeTab theme={theme} />}
+        {activeTab === "ask" && <AskIdeTab theme={theme} bridgeOnline={bridgeOnline} />}
       </ScrollView>
 
       <View style={[styles.tabBar, { backgroundColor: theme.tabBar, borderTopColor: theme.border }]}>
@@ -479,7 +670,7 @@ export default function App() {
               key={t.id}
               activeOpacity={0.7}
               style={styles.tabItem}
-              onPress={() => setActiveTab(t.id)}
+              onPress={() => selectTab(t)}
             >
               <Text style={[styles.tabIcon, { color: active ? theme.accent : theme.textFaint }]}>{t.icon}</Text>
               <Text style={[styles.tabLabel, { color: active ? theme.accent : theme.textFaint }]}>{t.label}</Text>
@@ -511,15 +702,14 @@ const styles = StyleSheet.create({
   recordingIndicator: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 },
   liveDot: { width: 8, height: 8, borderRadius: 4 },
   sectionLabel: { fontSize: 11, fontWeight: "700", letterSpacing: 0.8, marginTop: 28, marginBottom: 10 },
-  segmented: { flexDirection: "row", borderRadius: 12, padding: 4, gap: 4 },
-  segment: { flex: 1, paddingVertical: 10, borderRadius: 9, alignItems: "center" },
-  segmentText: { fontSize: 13, fontWeight: "600" },
   actionRow: { flexDirection: "row", gap: 10 },
   actionCard: { flex: 1, borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, padding: 14 },
   actionIcon: { fontSize: 18, fontWeight: "800", marginBottom: 8 },
   actionTitle: { fontSize: 14, fontWeight: "700" },
   actionSubtitle: { fontSize: 12, marginTop: 2 },
   recordGlyph: { width: 14, height: 14, borderRadius: 7 },
+  toggleTrack: { width: 44, height: 26, borderRadius: 13, padding: 3, justifyContent: "center" },
+  toggleThumb: { width: 20, height: 20, borderRadius: 10 },
   recordTitle: { fontSize: 15, fontWeight: "700" },
   chevron: { fontSize: 20, fontWeight: "300" },
   emptyState: { fontSize: 13, textAlign: "center", paddingVertical: 28, paddingHorizontal: 16 },
@@ -530,6 +720,13 @@ const styles = StyleSheet.create({
   stepRow: { flexDirection: "row", alignItems: "center", paddingVertical: 12, paddingHorizontal: 14, gap: 12 },
   stepBadge: { width: 22, height: 22, borderRadius: 11, alignItems: "center", justifyContent: "center" },
   stepBadgeText: { fontSize: 12, fontWeight: "700" },
+  reportRow: { flexDirection: "row", alignItems: "center", paddingVertical: 12, paddingHorizontal: 14, gap: 12 },
+  detailHeaderRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 8 },
+  backRow: { flexDirection: "row", alignItems: "center", gap: 2 },
+  backChevron: { fontSize: 20, fontWeight: "600" },
+  backLabel: { fontSize: 15, fontWeight: "600" },
+  shareButton: { width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center" },
+  shareIcon: { fontSize: 16, fontWeight: "700" },
   footer: { fontSize: 12, textAlign: "center", marginTop: 24, lineHeight: 18 },
   promptGroupLabel: { fontSize: 11, fontWeight: "700", letterSpacing: 0.6, marginBottom: 8 },
   promptRow: {
