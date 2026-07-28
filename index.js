@@ -58,7 +58,31 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "get_mobile_app_logs",
         description:
-          "Retrieves recent console logs and network errors captured in the running mobile app's state.",
+          "Retrieves recent structured console logs and network errors captured in the running mobile app's state. Optionally filter by level.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            level: {
+              type: "string",
+              enum: ["info", "success", "error"],
+              description: "Only return logs at this level. Omit to return all logs.",
+            },
+          },
+        },
+      },
+      {
+        name: "check_mobile_connection",
+        description:
+          "Checks whether the mobile bridge is reachable and returns a friendly human-readable connection summary plus the raw device status.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
+      {
+        name: "diagnose_mobile_error",
+        description:
+          "Finds the most recent error-level log entry captured on the device and returns a structured diagnosis with a likely cause and suggested fix.",
         inputSchema: {
           type: "object",
           properties: {},
@@ -123,7 +147,7 @@ function unreachableResponse() {
 }
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name } = request.params;
+  const { name, arguments: args = {} } = request.params;
 
   try {
     if (name === "get_mobile_device_status") {
@@ -134,9 +158,76 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === "get_mobile_app_logs") {
-      const logs = await fetchFromPhone("/logs");
+      const { logs } = await fetchFromPhone("/logs");
+      const filtered = args.level
+        ? logs.filter((entry) => entry.level === args.level)
+        : logs;
       return {
-        content: [{ type: "text", text: JSON.stringify(logs, null, 2) }],
+        content: [
+          { type: "text", text: JSON.stringify({ logs: filtered }, null, 2) },
+        ],
+      };
+    }
+
+    if (name === "check_mobile_connection") {
+      const status = await fetchFromPhone("/status");
+      const platformLabel =
+        status.platform === "ios" ? "iOS" : status.platform === "android" ? "Android" : status.platform;
+      const summary = `✅ Connected to ${platformLabel} device (${platformLabel} ${status.osVersion}) — app v${status.appVersion} (build ${status.buildNumber}), battery ${status.batteryLevel}, screen: ${status.activeRoute}`;
+      return {
+        content: [
+          { type: "text", text: summary },
+          { type: "text", text: JSON.stringify(status, null, 2) },
+        ],
+      };
+    }
+
+    if (name === "diagnose_mobile_error") {
+      const { logs } = await fetchFromPhone("/logs");
+      const errorEntry = [...logs].reverse().find((entry) => entry.level === "error");
+
+      if (!errorEntry) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "No errors recorded. No log entry with level 'error' was found on the device.",
+            },
+          ],
+        };
+      }
+
+      const message = errorEntry.message || "";
+      let likelyCause = "unknown";
+      let suggestion = "inspect the message and device state below for clues";
+
+      if (/timeout/i.test(message)) {
+        likelyCause = "network timeout";
+        suggestion = "network timeout — check connectivity or API responsiveness";
+      } else if (/404/.test(message)) {
+        likelyCause = "endpoint not found";
+        suggestion = "endpoint not found — check the URL/route";
+      } else if (/enotfound|dns/i.test(message)) {
+        likelyCause = "DNS/host resolution failure";
+        suggestion = "DNS/host resolution failure";
+      } else if (/network/i.test(message) || /fetch/i.test(message)) {
+        likelyCause = "network request failed";
+        suggestion = "network request failed";
+      } else {
+        likelyCause = "unclear from message alone";
+      }
+
+      const diagnosis = {
+        found: true,
+        errorMessage: errorEntry.message,
+        source: errorEntry.source,
+        occurredAt: errorEntry.timestamp,
+        device: errorEntry.device,
+        likelyCause,
+        suggestion,
+      };
+      return {
+        content: [{ type: "text", text: JSON.stringify(diagnosis, null, 2) }],
       };
     }
 

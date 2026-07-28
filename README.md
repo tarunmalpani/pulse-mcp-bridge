@@ -48,6 +48,10 @@ import { startPulseServer, setCurrentRoute, recordLog } from "./pulseServer";
 useEffect(() => {
   if (__DEV__) startPulseServer();
 }, []);
+
+// Anywhere in the app:
+recordLog("Synced dashboard data", "success", "SyncService");
+recordLog(`Network request failed: ${error.message}`, "error", "NetworkClient");
 ```
 
 Make sure your phone and dev machine are on the same Wi-Fi network.
@@ -58,8 +62,10 @@ Make sure your phone and dev machine are on the same Wi-Fi network.
 
 | Tool | Description |
 |---|---|
-| `get_mobile_device_status` | Battery level, active route/screen, OS/platform from the running app |
-| `get_mobile_app_logs` | Recent console logs / network errors captured in the app |
+| `get_mobile_device_status` | Battery level, active route/screen, OS/platform, and `connectedAt` from the running app |
+| `get_mobile_app_logs` | Recent structured log entries (`{ id, timestamp, level, source, message, device }`) captured in the app; optionally filter by `level` (info/success/error) |
+| `check_mobile_connection` | Pings `/status` and returns a friendly human-readable connection summary plus the raw status JSON, or a clean unreachable error |
+| `diagnose_mobile_error` | Finds the most recent `error`-level log and returns a structured diagnosis (`likelyCause`/`suggestion`) derived from the message text |
 | `get_standup_snapshot` | Combines live device status with today's local git commits (falls back gracefully outside a git repo) |
 | `get_mobile_screenshot` | Live screenshot of whatever screen is currently showing on the app, returned as an inline image |
 | `get_bug_report` | The current/live step recording (see below) plus device context, for reproducing a bug in progress |

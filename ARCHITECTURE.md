@@ -1,4 +1,4 @@
-# pulse-mcp-bridge — Technical Architecture
+    # pulse-mcp-bridge — Technical Architecture
 
 This document explains how the MCP server actually works under the hood: the protocol, the components, the data flow, and every tool/library involved. For setup instructions, see `README.md`.
 
@@ -53,8 +53,8 @@ This file is not part of the MCP server process — it's source code meant to be
 
 | Route | Returns | Backed by |
 |---|---|---|
-| `GET /status` | `{ status, batteryLevel, platform, osVersion, appVersion, buildNumber, activeRoute }` | `react-native-device-info` + in-memory `currentRouteName` |
-| `GET /logs` | `{ logs: [...] }` | In-memory ring buffer (`recentLogs`, capped at 100 entries), fed by calling `recordLog(...)` anywhere in the app |
+| `GET /status` | `{ status, batteryLevel, platform, osVersion, appVersion, buildNumber, activeRoute, connectedAt }` | `react-native-device-info` + in-memory `currentRouteName`; `connectedAt` is set once when `startPulseServer()` runs |
+| `GET /logs` | `{ logs: [{ id, timestamp, level, source, message, device }, ...] }` | In-memory ring buffer (`recentLogs`, capped at 100 entries), fed by calling `recordLog(message, level, source)` anywhere in the app; each entry carries a synchronous device snapshot (cached battery level, no per-call `DeviceInfo` await) |
 | `GET /screenshot` | `{ image: <base64>, mimeType: "image/png" }` | `react-native-view-shot` |
 | `GET /session` | `{ recording: bool, steps: [...] }` | In-memory step list, fed by `recordStep(...)`, only active between `startSessionRecording()`/`stopSessionRecording()` |
 
@@ -66,13 +66,17 @@ Each tool is a thin wrapper: fetch one (or two) routes from the phone, reshape t
 
 | Tool | What it does | Phone routes hit |
 |---|---|---|
-| `get_mobile_device_status` | Battery, screen, platform, OS/app version | `GET /status` |
-| `get_mobile_app_logs` | Recent console/network logs | `GET /logs` |
+| `get_mobile_device_status` | Battery, screen, platform, OS/app version, connectedAt | `GET /status` |
+| `get_mobile_app_logs` | Recent structured console/network logs, optionally filtered by `level` (info/success/error) | `GET /logs` |
+| `check_mobile_connection` | Friendly human-readable "is it alive" summary plus raw status JSON, or a clean unreachable error | `GET /status` |
+| `diagnose_mobile_error` | Finds the most recent `error`-level log entry and derives a `likelyCause`/`suggestion` from the message text (timeout/404/DNS/network heuristics) | `GET /logs` |
 | `get_mobile_screenshot` | Live screenshot as an inline image | `GET /screenshot` — returned as an MCP `image` content block (not text) |
 | `get_standup_snapshot` | Device status + today's git commits combined | `GET /status` + local `git log` |
 | `get_bug_report` | Numbered repro-steps sequence + likely failure point + device context | `GET /session` + `GET /status` |
 
 `get_bug_report` is the most composed tool: it fetches the step recording, finds the last step, checks it against `/error|fail|fatal|exception/i` to guess where things broke, and merges in device/build info from `/status` — all without the tester having to write up "steps to reproduce" by hand.
+
+`diagnose_mobile_error` is similar in spirit but works off structured logs instead of step recordings: it walks `/logs` backwards for the newest `level: "error"` entry, then pattern-matches the message text (`/timeout/i`, `/404/`, `ENOTFOUND`/DNS, `/network|fetch/i`) to suggest a likely cause, falling back to "inspect the message and device state below for clues" when nothing matches.
 
 ## End-to-end request lifecycle (example: `get_mobile_device_status`)
 
