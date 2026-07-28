@@ -58,6 +58,12 @@ const SCREENS = [
   { id: "SettingsScreen", label: "Settings" },
 ];
 
+const TABS = [
+  { id: "home", label: "Home", icon: "⌂" },
+  { id: "log", label: "Log", icon: "▤" },
+  { id: "ask", label: "Ask IDE", icon: "▷" },
+];
+
 const PALETTE = {
   light: {
     bg: "#F5F6F8",
@@ -74,6 +80,7 @@ const PALETTE = {
     dangerSoft: "#FDEDED",
     track: "#EEF0F3",
     shadow: "#0F172A",
+    tabBar: "#FFFFFF",
   },
   dark: {
     bg: "#0B0D12",
@@ -90,6 +97,7 @@ const PALETTE = {
     dangerSoft: "#3A1B1B",
     track: "#1E222C",
     shadow: "#000000",
+    tabBar: "#12141C",
   },
 };
 
@@ -165,11 +173,216 @@ function StatusPill({ theme, color, label }) {
   );
 }
 
+function ScreenHeader({ theme, title, subtitle }) {
+  return (
+    <View style={styles.header}>
+      <View>
+        <Text style={[styles.title, { color: theme.text }]}>{title}</Text>
+        <Text style={[styles.tagline, { color: theme.textMuted }]}>{subtitle}</Text>
+      </View>
+      <StatusPill theme={theme} color={theme.success} label="Bridge online" />
+    </View>
+  );
+}
+
+function HomeTab({ theme, route, recording, stepCount, goToScreen, logSuccess, logNetworkError, toggleRecording }) {
+  return (
+    <>
+      <ScreenHeader theme={theme} title="PulseMCP" subtitle="Live device bridge · port 8080" />
+
+      <Card theme={theme} style={{ marginTop: 20 }}>
+        <View style={styles.statusRow}>
+          <View style={styles.statusItem}>
+            <Text style={[styles.statusLabel, { color: theme.textFaint }]}>ACTIVE SCREEN</Text>
+            <Text style={[styles.statusValue, { color: theme.text }]}>
+              {SCREENS.find((s) => s.id === route)?.label}
+            </Text>
+          </View>
+          <View style={[styles.statusDivider, { backgroundColor: theme.border }]} />
+          <View style={styles.statusItem}>
+            <Text style={[styles.statusLabel, { color: theme.textFaint }]}>RECORDING</Text>
+            {recording ? (
+              <View style={styles.recordingIndicator}>
+                <View style={[styles.liveDot, { backgroundColor: theme.danger }]} />
+                <Text style={[styles.statusValue, { color: theme.danger }]}>{stepCount} steps</Text>
+              </View>
+            ) : (
+              <Text style={[styles.statusValue, { color: theme.textFaint }]}>Off</Text>
+            )}
+          </View>
+        </View>
+      </Card>
+
+      <SectionLabel theme={theme}>NAVIGATE</SectionLabel>
+      <View style={[styles.segmented, { backgroundColor: theme.track }]}>
+        {SCREENS.map((s) => {
+          const active = route === s.id;
+          return (
+            <TouchableOpacity
+              key={s.id}
+              activeOpacity={0.8}
+              style={[styles.segment, active && { backgroundColor: theme.card, shadowColor: theme.shadow, shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 1 }]}
+              onPress={() => goToScreen(s.id, s.label)}
+            >
+              <Text style={[styles.segmentText, { color: active ? theme.text : theme.textMuted }]}>{s.label}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      <SectionLabel theme={theme}>SIMULATE ACTIVITY</SectionLabel>
+      <View style={styles.actionRow}>
+        <TouchableOpacity
+          activeOpacity={0.85}
+          style={[styles.actionCard, { backgroundColor: theme.successSoft, borderColor: theme.border }]}
+          onPress={logSuccess}
+        >
+          <Text style={styles.actionIcon}>✓</Text>
+          <Text style={[styles.actionTitle, { color: theme.success }]}>Log success</Text>
+          <Text style={[styles.actionSubtitle, { color: theme.textMuted }]}>Sync completed</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          activeOpacity={0.85}
+          style={[styles.actionCard, { backgroundColor: theme.dangerSoft, borderColor: theme.border }]}
+          onPress={logNetworkError}
+        >
+          <Text style={styles.actionIcon}>!</Text>
+          <Text style={[styles.actionTitle, { color: theme.danger }]}>Log error</Text>
+          <Text style={[styles.actionSubtitle, { color: theme.textMuted }]}>Network timeout</Text>
+        </TouchableOpacity>
+      </View>
+
+      <SectionLabel theme={theme}>BUG REPORT RECORDING</SectionLabel>
+      <TouchableOpacity activeOpacity={0.9} onPress={toggleRecording}>
+        <Card
+          theme={theme}
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            borderColor: recording ? theme.danger : theme.border,
+          }}
+        >
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+            <View
+              style={[
+                styles.recordGlyph,
+                { backgroundColor: recording ? theme.danger : theme.accent },
+                recording && { borderRadius: 6 },
+              ]}
+            />
+            <View>
+              <Text style={[styles.recordTitle, { color: theme.text }]}>
+                {recording ? "Stop recording" : "Start recording"}
+              </Text>
+              <Text style={[styles.actionSubtitle, { color: theme.textMuted }]}>
+                {recording ? "Tap to save the bug report" : "Capture steps for get_bug_report"}
+              </Text>
+            </View>
+          </View>
+          <Text style={[styles.chevron, { color: theme.textFaint }]}>›</Text>
+        </Card>
+      </TouchableOpacity>
+    </>
+  );
+}
+
+function LogTab({ theme, recording, steps, events, savedReportCount, eventDot }) {
+  return (
+    <>
+      <ScreenHeader theme={theme} title="Log" subtitle="What the app has done, in order" />
+
+      <SectionLabel theme={theme} style={{ marginTop: 20 }}>
+        RECORDED STEPS {recording ? "· recording" : ""}
+      </SectionLabel>
+      <Card theme={theme} style={{ padding: 0, overflow: "hidden" }}>
+        {steps.length === 0 ? (
+          <Text style={[styles.emptyState, { color: theme.textFaint }]}>
+            {recording
+              ? "Recording — perform actions on the Home tab and they'll show up here."
+              : "Not recording. Start a recording on the Home tab to capture numbered repro steps."}
+          </Text>
+        ) : (
+          steps.map((s, i) => (
+            <View
+              key={s.step}
+              style={[
+                styles.stepRow,
+                i !== steps.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.border },
+              ]}
+            >
+              <View style={[styles.stepBadge, { backgroundColor: theme.accentSoft }]}>
+                <Text style={[styles.stepBadgeText, { color: theme.accent }]}>{s.step}</Text>
+              </View>
+              <Text style={[styles.eventMessage, { color: theme.text }]}>{s.description}</Text>
+            </View>
+          ))
+        )}
+      </Card>
+      {savedReportCount > 0 ? (
+        <Text style={[styles.footer, { color: theme.textFaint, marginTop: 10, textAlign: "left" }]}>
+          {savedReportCount} bug report{savedReportCount === 1 ? "" : "s"} saved on this device.
+        </Text>
+      ) : null}
+
+      <SectionLabel theme={theme}>ACTIVITY</SectionLabel>
+      <Card theme={theme} style={{ padding: 0, overflow: "hidden" }}>
+        {events.length === 0 ? (
+          <Text style={[styles.emptyState, { color: theme.textFaint }]}>
+            Nothing yet — actions from the Home tab will appear here.
+          </Text>
+        ) : (
+          events.map((e, i) => (
+            <View
+              key={e.id}
+              style={[
+                styles.eventRow,
+                i !== events.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.border },
+              ]}
+            >
+              <View style={[styles.eventDot, { backgroundColor: eventDot[e.kind] }]} />
+              <Text style={[styles.eventMessage, { color: theme.text }]} numberOfLines={1}>
+                {e.message}
+              </Text>
+              <Text style={[styles.eventTime, { color: theme.textFaint }]}>
+                {e.time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+              </Text>
+            </View>
+          ))
+        )}
+      </Card>
+    </>
+  );
+}
+
+function AskIdeTab({ theme }) {
+  return (
+    <>
+      <ScreenHeader theme={theme} title="Ask IDE" subtitle="Tap to copy a prompt for your MCP client" />
+      <View style={{ marginTop: 20 }}>
+        {PROMPT_GROUPS.map((group) => (
+          <View key={group.label} style={{ marginBottom: 20 }}>
+            <Text style={[styles.promptGroupLabel, { color: theme.textFaint }]}>{group.label}</Text>
+            {group.prompts.map((p) => (
+              <PromptRow key={p.text} theme={theme} text={p.text} tool={p.tool} />
+            ))}
+          </View>
+        ))}
+      </View>
+      <Text style={[styles.footer, { color: theme.textFaint }]}>
+        Point your IDE's MCP tools at this bridge to query status, logs, screenshots, and bug reports live.
+      </Text>
+    </>
+  );
+}
+
 export default function App() {
   const theme = useTheme();
+  const [activeTab, setActiveTab] = useState("home");
   const [route, setRoute] = useState(SCREENS[0].id);
   const [recording, setRecording] = useState(false);
-  const [stepCount, setStepCount] = useState(0);
+  const [steps, setSteps] = useState([]);
+  const [savedReportCount, setSavedReportCount] = useState(0);
   const [events, setEvents] = useState([]);
 
   useEffect(() => {
@@ -177,33 +390,30 @@ export default function App() {
   }, []);
 
   const pushEvent = (kind, message) =>
-    setEvents((prev) => [{ id: Date.now() + Math.random(), kind, message, time: new Date() }, ...prev].slice(0, 12));
+    setEvents((prev) => [{ id: Date.now() + Math.random(), kind, message, time: new Date() }, ...prev].slice(0, 20));
+
+  function pushStep(description) {
+    if (!recording) return;
+    recordStep(description);
+    setSteps((prev) => [...prev, { step: prev.length + 1, description }]);
+  }
 
   function goToScreen(id, label) {
     setRoute(id);
     setCurrentRoute(id);
-    if (recording) {
-      recordStep(`Navigated to ${label}`);
-      setStepCount((c) => c + 1);
-    }
+    pushStep(`Navigated to ${label}`);
     pushEvent("nav", `Navigated to ${label}`);
   }
 
   function logSuccess() {
     recordLog("Synced dashboard data", "success", "SyncService");
-    if (recording) {
-      recordStep("Tapped 'Sync Now'");
-      setStepCount((c) => c + 1);
-    }
+    pushStep("Tapped 'Sync Now'");
     pushEvent("success", "Synced dashboard data");
   }
 
   function logNetworkError() {
     recordLog("Network request failed: timeout after 3000ms", "error", "NetworkClient");
-    if (recording) {
-      recordStep("Sync failed: request timed out after 3000ms");
-      setStepCount((c) => c + 1);
-    }
+    pushStep("Sync failed: request timed out after 3000ms");
     pushEvent("error", "Network request failed: timeout after 3000ms");
   }
 
@@ -211,11 +421,12 @@ export default function App() {
     if (!recording) {
       startSessionRecording();
       setRecording(true);
-      setStepCount(0);
+      setSteps([]);
       pushEvent("record", "Recording started");
     } else {
       stopSessionRecording().then((report) => {
         setRecording(false);
+        setSavedReportCount((c) => c + 1);
         pushEvent("record", `Report #${report.id} saved · ${report.steps.length} steps`);
       });
     }
@@ -235,156 +446,50 @@ export default function App() {
     <SafeAreaView style={[styles.container, { backgroundColor: theme.bg }]}>
       <ExpoStatusBar style="auto" />
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        {/* Header */}
-        <View style={styles.header}>
-          <View>
-            <Text style={[styles.title, { color: theme.text }]}>PulseMCP</Text>
-            <Text style={[styles.tagline, { color: theme.textMuted }]}>Live device bridge · port 8080</Text>
-          </View>
-          <StatusPill theme={theme} color={theme.success} label="Bridge online" />
-        </View>
-
-        {/* Current state summary */}
-        <Card theme={theme} style={{ marginTop: 20 }}>
-          <View style={styles.statusRow}>
-            <View style={styles.statusItem}>
-              <Text style={[styles.statusLabel, { color: theme.textFaint }]}>ACTIVE SCREEN</Text>
-              <Text style={[styles.statusValue, { color: theme.text }]}>
-                {SCREENS.find((s) => s.id === route)?.label}
-              </Text>
-            </View>
-            <View style={[styles.statusDivider, { backgroundColor: theme.border }]} />
-            <View style={styles.statusItem}>
-              <Text style={[styles.statusLabel, { color: theme.textFaint }]}>RECORDING</Text>
-              {recording ? (
-                <View style={styles.recordingIndicator}>
-                  <View style={[styles.liveDot, { backgroundColor: theme.danger }]} />
-                  <Text style={[styles.statusValue, { color: theme.danger }]}>{stepCount} steps</Text>
-                </View>
-              ) : (
-                <Text style={[styles.statusValue, { color: theme.textFaint }]}>Off</Text>
-              )}
-            </View>
-          </View>
-        </Card>
-
-        {/* Navigate */}
-        <SectionLabel theme={theme}>NAVIGATE</SectionLabel>
-        <View style={[styles.segmented, { backgroundColor: theme.track }]}>
-          {SCREENS.map((s) => {
-            const active = route === s.id;
-            return (
-              <TouchableOpacity
-                key={s.id}
-                activeOpacity={0.8}
-                style={[styles.segment, active && { backgroundColor: theme.card, shadowColor: theme.shadow, shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 1 }]}
-                onPress={() => goToScreen(s.id, s.label)}
-              >
-                <Text style={[styles.segmentText, { color: active ? theme.text : theme.textMuted }]}>{s.label}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        {/* Simulate activity */}
-        <SectionLabel theme={theme}>SIMULATE ACTIVITY</SectionLabel>
-        <View style={styles.actionRow}>
-          <TouchableOpacity
-            activeOpacity={0.85}
-            style={[styles.actionCard, { backgroundColor: theme.successSoft, borderColor: theme.border }]}
-            onPress={logSuccess}
-          >
-            <Text style={styles.actionIcon}>✓</Text>
-            <Text style={[styles.actionTitle, { color: theme.success }]}>Log success</Text>
-            <Text style={[styles.actionSubtitle, { color: theme.textMuted }]}>Sync completed</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            activeOpacity={0.85}
-            style={[styles.actionCard, { backgroundColor: theme.dangerSoft, borderColor: theme.border }]}
-            onPress={logNetworkError}
-          >
-            <Text style={styles.actionIcon}>!</Text>
-            <Text style={[styles.actionTitle, { color: theme.danger }]}>Log error</Text>
-            <Text style={[styles.actionSubtitle, { color: theme.textMuted }]}>Network timeout</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Bug report recording */}
-        <SectionLabel theme={theme}>BUG REPORT RECORDING</SectionLabel>
-        <TouchableOpacity activeOpacity={0.9} onPress={toggleRecording}>
-          <Card
+        {activeTab === "home" && (
+          <HomeTab
             theme={theme}
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "space-between",
-              borderColor: recording ? theme.danger : theme.border,
-            }}
-          >
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-              <View
-                style={[
-                  styles.recordGlyph,
-                  { backgroundColor: recording ? theme.danger : theme.accent },
-                  recording && { borderRadius: 6 },
-                ]}
-              />
-              <View>
-                <Text style={[styles.recordTitle, { color: theme.text }]}>
-                  {recording ? "Stop recording" : "Start recording"}
-                </Text>
-                <Text style={[styles.actionSubtitle, { color: theme.textMuted }]}>
-                  {recording ? "Tap to save the bug report" : "Capture steps for get_bug_report"}
-                </Text>
-              </View>
-            </View>
-            <Text style={[styles.chevron, { color: theme.textFaint }]}>›</Text>
-          </Card>
-        </TouchableOpacity>
-
-        {/* Event timeline */}
-        <SectionLabel theme={theme}>ACTIVITY</SectionLabel>
-        <Card theme={theme} style={{ padding: 0, overflow: "hidden" }}>
-          {events.length === 0 ? (
-            <Text style={[styles.emptyState, { color: theme.textFaint }]}>
-              Nothing yet — tap an action above to see it here.
-            </Text>
-          ) : (
-            events.map((e, i) => (
-              <View
-                key={e.id}
-                style={[
-                  styles.eventRow,
-                  i !== events.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.border },
-                ]}
-              >
-                <View style={[styles.eventDot, { backgroundColor: eventDot[e.kind] }]} />
-                <Text style={[styles.eventMessage, { color: theme.text }]} numberOfLines={1}>
-                  {e.message}
-                </Text>
-                <Text style={[styles.eventTime, { color: theme.textFaint }]}>
-                  {e.time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-                </Text>
-              </View>
-            ))
-          )}
-        </Card>
-
-        {/* Sample MCP prompts */}
-        <SectionLabel theme={theme}>ASK YOUR IDE — TAP TO COPY</SectionLabel>
-        {PROMPT_GROUPS.map((group) => (
-          <View key={group.label} style={{ marginBottom: 20 }}>
-            <Text style={[styles.promptGroupLabel, { color: theme.textFaint }]}>{group.label}</Text>
-            {group.prompts.map((p) => (
-              <PromptRow key={p.text} theme={theme} text={p.text} tool={p.tool} />
-            ))}
-          </View>
-        ))}
-
-        <Text style={[styles.footer, { color: theme.textFaint }]}>
-          Point your IDE's MCP tools at this bridge to query status, logs, screenshots, and bug reports live.
-        </Text>
+            route={route}
+            recording={recording}
+            stepCount={steps.length}
+            goToScreen={goToScreen}
+            logSuccess={logSuccess}
+            logNetworkError={logNetworkError}
+            toggleRecording={toggleRecording}
+          />
+        )}
+        {activeTab === "log" && (
+          <LogTab
+            theme={theme}
+            recording={recording}
+            steps={steps}
+            events={events}
+            savedReportCount={savedReportCount}
+            eventDot={eventDot}
+          />
+        )}
+        {activeTab === "ask" && <AskIdeTab theme={theme} />}
       </ScrollView>
+
+      <View style={[styles.tabBar, { backgroundColor: theme.tabBar, borderTopColor: theme.border }]}>
+        {TABS.map((t) => {
+          const active = activeTab === t.id;
+          return (
+            <TouchableOpacity
+              key={t.id}
+              activeOpacity={0.7}
+              style={styles.tabItem}
+              onPress={() => setActiveTab(t.id)}
+            >
+              <Text style={[styles.tabIcon, { color: active ? theme.accent : theme.textFaint }]}>{t.icon}</Text>
+              <Text style={[styles.tabLabel, { color: active ? theme.accent : theme.textFaint }]}>{t.label}</Text>
+              {t.id === "log" && recording ? (
+                <View style={[styles.tabBadge, { backgroundColor: theme.danger }]} />
+              ) : null}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
     </SafeAreaView>
   );
 }
@@ -422,6 +527,9 @@ const styles = StyleSheet.create({
   eventDot: { width: 7, height: 7, borderRadius: 3.5 },
   eventMessage: { fontSize: 13, fontWeight: "500", flex: 1 },
   eventTime: { fontSize: 11, fontVariant: ["tabular-nums"] },
+  stepRow: { flexDirection: "row", alignItems: "center", paddingVertical: 12, paddingHorizontal: 14, gap: 12 },
+  stepBadge: { width: 22, height: 22, borderRadius: 11, alignItems: "center", justifyContent: "center" },
+  stepBadgeText: { fontSize: 12, fontWeight: "700" },
   footer: { fontSize: 12, textAlign: "center", marginTop: 24, lineHeight: 18 },
   promptGroupLabel: { fontSize: 11, fontWeight: "700", letterSpacing: 0.6, marginBottom: 8 },
   promptRow: {
@@ -439,4 +547,14 @@ const styles = StyleSheet.create({
   promptTool: { fontSize: 10, marginTop: 4, fontVariant: ["tabular-nums"] },
   copyButton: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, paddingVertical: 6, paddingHorizontal: 12 },
   copyButtonText: { fontSize: 12, fontWeight: "700" },
+  tabBar: {
+    flexDirection: "row",
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: 8,
+    paddingBottom: 8,
+  },
+  tabItem: { flex: 1, alignItems: "center", gap: 3 },
+  tabIcon: { fontSize: 20 },
+  tabLabel: { fontSize: 11, fontWeight: "600" },
+  tabBadge: { position: "absolute", top: 0, right: "32%", width: 7, height: 7, borderRadius: 3.5 },
 });
