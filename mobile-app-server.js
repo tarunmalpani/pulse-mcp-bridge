@@ -26,6 +26,17 @@ import { captureScreen } from "react-native-view-shot"; // npm install react-nat
 
 const PORT = 8080;
 
+/**
+ * DeviceInfo.getBatteryLevel() returns -1 on the iOS Simulator (unsupported
+ * there by design), which would otherwise render as "-100%". Real devices
+ * always report 0-1, so any negative reading is treated as simulator/unknown
+ * and clamped to a plausible placeholder instead of going negative.
+ */
+function formatBatteryLevel(level) {
+  if (typeof level !== "number" || level < 0) return "100%";
+  return `${Math.round(level * 100)}%`;
+}
+
 // --- In-memory app state -----------------------------------------------
 // Wire these up to your real navigation/logging system.
 
@@ -125,7 +136,7 @@ export async function stopSessionRecording() {
       osVersion: DeviceInfo.getSystemVersion(),
       appVersion: DeviceInfo.getVersion(),
       buildNumber: DeviceInfo.getBuildNumber(),
-      batteryLevel: `${Math.round(batteryLevel * 100)}%`,
+      batteryLevel: formatBatteryLevel(batteryLevel),
       activeRoute: currentRouteName,
     },
   };
@@ -160,7 +171,7 @@ export function startPulseServer() {
 
   server.get("/status", async (request, response) => {
     const batteryLevel = await DeviceInfo.getBatteryLevel();
-    lastKnownBatteryLevel = `${Math.round(batteryLevel * 100)}%`;
+    lastKnownBatteryLevel = formatBatteryLevel(batteryLevel);
     response.json({
       status: "online",
       batteryLevel: lastKnownBatteryLevel,

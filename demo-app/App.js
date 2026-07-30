@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   SafeAreaView,
   ScrollView,
@@ -394,38 +394,11 @@ function ReportDetail({ theme, report, onBack }) {
           ))
         )}
       </Card>
-
-      <SectionLabel theme={theme}>LOGS AT TIME OF REPORT ({report.logs.length})</SectionLabel>
-      <Card theme={theme} style={{ padding: 0, overflow: "hidden" }}>
-        {report.logs.length === 0 ? (
-          <Text style={[styles.emptyState, { color: theme.textFaint }]}>No logs were captured in this recording.</Text>
-        ) : (
-          report.logs.map((l, i) => (
-            <View
-              key={l.id}
-              style={[
-                styles.eventRow,
-                i !== report.logs.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.border },
-              ]}
-            >
-              <View
-                style={[
-                  styles.eventDot,
-                  { backgroundColor: l.level === "error" ? theme.danger : l.level === "success" ? theme.success : theme.textFaint },
-                ]}
-              />
-              <Text style={[styles.eventMessage, { color: theme.text }]} numberOfLines={1}>
-                {l.message}
-              </Text>
-            </View>
-          ))
-        )}
-      </Card>
     </>
   );
 }
 
-function LogTab({ theme, recording, steps, events, savedReports, eventDot, bridgeOnline }) {
+function LogTab({ theme, logs, savedReports, bridgeOnline }) {
   const [selectedReport, setSelectedReport] = useState(null);
 
   if (selectedReport) {
@@ -436,29 +409,33 @@ function LogTab({ theme, recording, steps, events, savedReports, eventDot, bridg
     <>
       <ScreenHeader theme={theme} title="Log" subtitle="What the app has done, in order" bridgeOnline={bridgeOnline} />
 
-      <SectionLabel theme={theme} style={{ marginTop: 20 }}>
-        RECORDED STEPS {recording ? "· recording" : ""}
-      </SectionLabel>
+      <SectionLabel theme={theme} style={{ marginTop: 20 }}>LOGS ({logs.length})</SectionLabel>
       <Card theme={theme} style={{ padding: 0, overflow: "hidden" }}>
-        {steps.length === 0 ? (
+        {logs.length === 0 ? (
           <Text style={[styles.emptyState, { color: theme.textFaint }]}>
-            {recording
-              ? "Recording — perform actions on the Home tab and they'll show up here."
-              : "Not recording. Start a recording on the Home tab to capture numbered repro steps."}
+            Tap "Log success" or "Log error" on the Home tab to see entries here.
           </Text>
         ) : (
-          steps.map((s, i) => (
+          logs.map((l, i) => (
             <View
-              key={s.step}
+              key={l.id}
               style={[
-                styles.stepRow,
-                i !== steps.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.border },
+                styles.logRow,
+                i !== logs.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.border },
               ]}
             >
-              <View style={[styles.stepBadge, { backgroundColor: theme.accentSoft }]}>
-                <Text style={[styles.stepBadgeText, { color: theme.accent }]}>{s.step}</Text>
+              <View
+                style={[
+                  styles.logDot,
+                  { backgroundColor: l.level === "error" ? theme.danger : theme.success },
+                ]}
+              />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.eventMessage, { color: theme.text }]}>{l.message}</Text>
+                <Text style={[styles.logMeta, { color: theme.textFaint }]}>
+                  {l.source} · {l.time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                </Text>
               </View>
-              <Text style={[styles.eventMessage, { color: theme.text }]}>{s.description}</Text>
             </View>
           ))
         )}
@@ -496,33 +473,6 @@ function LogTab({ theme, recording, steps, events, savedReports, eventDot, bridg
           ))
         )}
       </Card>
-
-      <SectionLabel theme={theme}>ACTIVITY</SectionLabel>
-      <Card theme={theme} style={{ padding: 0, overflow: "hidden" }}>
-        {events.length === 0 ? (
-          <Text style={[styles.emptyState, { color: theme.textFaint }]}>
-            Nothing yet — actions from the Home tab will appear here.
-          </Text>
-        ) : (
-          events.map((e, i) => (
-            <View
-              key={e.id}
-              style={[
-                styles.eventRow,
-                i !== events.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.border },
-              ]}
-            >
-              <View style={[styles.eventDot, { backgroundColor: eventDot[e.kind] }]} />
-              <Text style={[styles.eventMessage, { color: theme.text }]} numberOfLines={1}>
-                {e.message}
-              </Text>
-              <Text style={[styles.eventTime, { color: theme.textFaint }]}>
-                {e.time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-              </Text>
-            </View>
-          ))
-        )}
-      </Card>
     </>
   );
 }
@@ -553,8 +503,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("home");
   const [recording, setRecording] = useState(false);
   const [steps, setSteps] = useState([]);
+  const [logs, setLogs] = useState([]);
   const [savedReports, setSavedReports] = useState([]);
-  const [events, setEvents] = useState([]);
   const [bridgeOnline, setBridgeOnline] = useState(true);
 
   const activeTabMeta = TABS.find((t) => t.id === activeTab);
@@ -564,13 +514,14 @@ export default function App() {
     setCurrentRoute(activeTabMeta.routeId);
   }, []);
 
-  const pushEvent = (kind, message) =>
-    setEvents((prev) => [{ id: Date.now() + Math.random(), kind, message, time: new Date() }, ...prev].slice(0, 20));
-
   function pushStep(description) {
     if (!recording) return;
     recordStep(description);
     setSteps((prev) => [...prev, { step: prev.length + 1, description }]);
+  }
+
+  function pushLog(level, message, source) {
+    setLogs((prev) => [{ id: Date.now() + Math.random(), level, message, source, time: new Date() }, ...prev].slice(0, 30));
   }
 
   function selectTab(tab) {
@@ -578,19 +529,20 @@ export default function App() {
     setActiveTab(tab.id);
     setCurrentRoute(tab.routeId);
     pushStep(`Navigated to ${tab.label}`);
-    pushEvent("nav", `Navigated to ${tab.label}`);
   }
 
   function logSuccess() {
-    recordLog("Synced dashboard data", "success", "SyncService");
+    const message = "GET /api/dashboard/sync succeeded in 240ms";
+    recordLog(message, "success", "SyncService");
+    pushLog("success", message, "SyncService");
     pushStep("Tapped 'Sync Now'");
-    pushEvent("success", "Synced dashboard data");
   }
 
   function logNetworkError() {
-    recordLog("Network request failed: timeout after 3000ms", "error", "NetworkClient");
+    const message = "GET /api/dashboard/sync timed out after 3000ms (ETIMEDOUT)";
+    recordLog(message, "error", "NetworkClient");
+    pushLog("error", message, "NetworkClient");
     pushStep("Sync failed: request timed out after 3000ms");
-    pushEvent("error", "Network request failed: timeout after 3000ms");
   }
 
   function toggleRecording() {
@@ -598,12 +550,10 @@ export default function App() {
       startSessionRecording();
       setRecording(true);
       setSteps([]);
-      pushEvent("record", "Recording started");
     } else {
       stopSessionRecording().then((report) => {
         setRecording(false);
         setSavedReports((prev) => [report, ...prev]);
-        pushEvent("record", `Report #${report.id} saved · ${report.steps.length} steps`);
       });
     }
   }
@@ -612,24 +562,11 @@ export default function App() {
     if (bridgeOnline) {
       stopPulseServer();
       setBridgeOnline(false);
-      pushEvent("bridge", "Bridge taken offline");
     } else {
       startPulseServer();
       setBridgeOnline(true);
-      pushEvent("bridge", "Bridge brought back online");
     }
   }
-
-  const eventDot = useMemo(
-    () => ({
-      success: theme.success,
-      error: theme.danger,
-      nav: theme.accent,
-      record: theme.danger,
-      bridge: theme.accent,
-    }),
-    [theme]
-  );
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.bg }]}>
@@ -649,15 +586,7 @@ export default function App() {
           />
         )}
         {activeTab === "log" && (
-          <LogTab
-            theme={theme}
-            recording={recording}
-            steps={steps}
-            events={events}
-            savedReports={savedReports}
-            eventDot={eventDot}
-            bridgeOnline={bridgeOnline}
-          />
+          <LogTab theme={theme} logs={logs} savedReports={savedReports} bridgeOnline={bridgeOnline} />
         )}
         {activeTab === "ask" && <AskIdeTab theme={theme} bridgeOnline={bridgeOnline} />}
       </ScrollView>
@@ -713,14 +642,14 @@ const styles = StyleSheet.create({
   recordTitle: { fontSize: 15, fontWeight: "700" },
   chevron: { fontSize: 20, fontWeight: "300" },
   emptyState: { fontSize: 13, textAlign: "center", paddingVertical: 28, paddingHorizontal: 16 },
-  eventRow: { flexDirection: "row", alignItems: "center", paddingVertical: 12, paddingHorizontal: 14, gap: 10 },
-  eventDot: { width: 7, height: 7, borderRadius: 3.5 },
   eventMessage: { fontSize: 13, fontWeight: "500", flex: 1 },
-  eventTime: { fontSize: 11, fontVariant: ["tabular-nums"] },
   stepRow: { flexDirection: "row", alignItems: "center", paddingVertical: 12, paddingHorizontal: 14, gap: 12 },
   stepBadge: { width: 22, height: 22, borderRadius: 11, alignItems: "center", justifyContent: "center" },
   stepBadgeText: { fontSize: 12, fontWeight: "700" },
   reportRow: { flexDirection: "row", alignItems: "center", paddingVertical: 12, paddingHorizontal: 14, gap: 12 },
+  logRow: { flexDirection: "row", alignItems: "flex-start", paddingVertical: 12, paddingHorizontal: 14, gap: 10 },
+  logDot: { width: 8, height: 8, borderRadius: 4, marginTop: 4 },
+  logMeta: { fontSize: 11, marginTop: 2 },
   detailHeaderRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 8 },
   backRow: { flexDirection: "row", alignItems: "center", gap: 2 },
   backChevron: { fontSize: 20, fontWeight: "600" },

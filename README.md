@@ -34,29 +34,43 @@ See `mcp-config.example.json` for ready-to-paste config blocks for Cursor, Claud
 
 ### 3. Wire up the real mobile app
 
-Copy `mobile-app-server.js` into your React Native / Expo app (e.g. `src/pulseServer.js`) and follow the integration comments at the top of the file:
+`index.js` (the MCP server) is generic and reusable as-is — it never needs to change per app. The only thing that changes per app is `mobile-app-server.js`, the tiny HTTP bridge that runs *inside* the app.
 
-```bash
-npm install react-native-http-bridge-refurbished react-native-device-info react-native-view-shot
-```
+**Setup, once per new app:**
 
-Then in `App.tsx`:
+1. **Copy the bridge file** into the target app, e.g. as `src/pulseServer.js`:
+   ```bash
+   cp mobile-app-server.js /path/to/your-app/src/pulseServer.js
+   ```
+2. **Install its native dependencies** in that app:
+   ```bash
+   npx expo install react-native-http-bridge-refurbished react-native-device-info react-native-view-shot
+   ```
+   These are native modules — if the app runs on plain Expo Go, you'll need a dev-client build instead (`npx expo prebuild` then `npx expo run:ios` / `npx expo run:android`).
+3. **Wire it into `App.tsx`**:
+   ```js
+   import { startPulseServer, setCurrentRoute, recordLog } from "./pulseServer";
 
-```js
-import { startPulseServer, setCurrentRoute, recordLog } from "./pulseServer";
+   useEffect(() => {
+     if (__DEV__) startPulseServer();
+   }, []);
 
-useEffect(() => {
-  if (__DEV__) startPulseServer();
-}, []);
+   // On navigation change:
+   setCurrentRoute(routeName);
 
-// Anywhere in the app:
-recordLog("Synced dashboard data", "success", "SyncService");
-recordLog(`Network request failed: ${error.message}`, "error", "NetworkClient");
-```
+   // Anywhere in the app:
+   recordLog("Synced dashboard data", "success", "SyncService");
+   recordLog(`Network request failed: ${error.message}`, "error", "NetworkClient");
+   ```
+   Add the bug-report recording hooks too if you want `get_bug_report` / `get_saved_bug_reports` — see "Bug-report step recording" below.
+4. **Same Wi-Fi network** — your phone/emulator and dev machine must be on the same Wi-Fi network (or use `127.0.0.1` for the iOS Simulator, which shares the Mac's own network stack).
+5. **Point your MCP config at this device**: set `MOBILE_PHONE_IP` (in your IDE's MCP config, see `mcp-config.example.json`) to that device's IP — `127.0.0.1` for Simulator, the phone's LAN IP (e.g. `192.168.1.50`) for a real device.
 
-Make sure your phone and dev machine are on the same Wi-Fi network.
+**Real device notes:**
 
-**Verified:** this integration has been tested end-to-end against a real Expo/React Native app running on the iOS Simulator (Expo SDK 51 / RN 0.74), including a live crash scenario — the bridge correctly goes unreachable when the app stops responding. Android has not been tested yet.
+- **Real iPhone — verified.** This integration has been tested end-to-end against a real Expo/React Native app on a real iPhone, including a live crash scenario — the bridge correctly goes unreachable when the app stops responding. iOS 14+ will prompt for a one-time **"Local Network" permission** the first time the app starts the bridge server — the user must tap Allow, or the bridge will be unreachable.
+- **Real Android — not yet verified**, though it should work in principle (`react-native-http-bridge-refurbished` supports Android too). Android 9+ blocks plaintext HTTP by default, so you'll likely need `android:usesCleartextTraffic="true"` in `AndroidManifest.xml` for local dev builds, or the bridge will silently fail to connect.
+- **Android emulator**: since it's NAT'd and can't be reached directly, use `127.0.0.1` plus `adb forward tcp:8080 tcp:8080`.
 
 ## Available MCP tools
 
