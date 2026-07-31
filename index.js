@@ -124,6 +124,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {},
         },
       },
+      {
+        name: "get_mobile_crash_logs",
+        description:
+          "Retrieves crashes automatically captured on the device - uncaught exceptions, React render errors, and unhandled promise rejections - with no developer action required at the moment of the crash. Each entry includes the error message, full stack trace, (for render errors) the component stack, breadcrumbs leading up to it, and a best-guess likelyCause/suggestion. Crashes that happened just before the app process died are recovered on the next launch, so this works even for crashes that killed the app.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
     ],
   };
 });
@@ -144,6 +153,56 @@ function unreachableResponse() {
       },
     ],
   };
+}
+
+/** Categorizes an error/crash message into a likely cause + suggestion, shared by crash and log diagnosis paths. */
+function categorizeErrorMessage(message) {
+  if (/cannot read propert(y|ies) .*(undefined|null)|undefined is not an object|null is not an object/i.test(message)) {
+    return {
+      likelyCause: "null/undefined property access",
+      suggestion: "code is reading a property off a value that's undefined/null — check the top stack frame for the exact line",
+    };
+  }
+  if (/is not a function/i.test(message)) {
+    return {
+      likelyCause: "calling a non-function value",
+      suggestion: "something expected to be a function wasn't — check for a typo, a missing import, or a wrong prop type",
+    };
+  }
+  if (/timeout/i.test(message)) {
+    return { likelyCause: "network timeout", suggestion: "a request timed out — check connectivity or API responsiveness" };
+  }
+  if (/404/.test(message)) {
+    return { likelyCause: "endpoint not found", suggestion: "endpoint not found — check the URL/route" };
+  }
+  if (/enotfound|dns/i.test(message)) {
+    return { likelyCause: "DNS/host resolution failure", suggestion: "the host could not be resolved — check the URL or network connection" };
+  }
+  if (/network request failed|fetch/i.test(message)) {
+    return { likelyCause: "network request failed", suggestion: "check the breadcrumbs for the specific API call that failed" };
+  }
+  if (/permission|denied/i.test(message)) {
+    return { likelyCause: "permission denied", suggestion: "the app may be missing a required OS-level permission" };
+  }
+  return { likelyCause: "unclear from message alone", suggestion: "inspect the stack trace and breadcrumbs below for clues" };
+}
+
+/**
+ * Extracts function name + line/column from the top N frames of a JS stack
+ * trace string, stripping away the (very long, query-string-heavy) bundler
+ * URLs so the result is actually readable.
+ */
+function parseTopStackFrames(stack, count = 3) {
+  if (!stack) return [];
+  const frames = [];
+  for (const line of stack.split("\n").slice(1)) {
+    const match = line.match(/at\s+([^\s(]+)\s*\(?.*?:(\d+):(\d+)\)?\s*$/);
+    if (match) {
+      frames.push({ function: match[1], line: Number(match[2]), column: Number(match[3]) });
+      if (frames.length >= count) break;
+    }
+  }
+  return frames;
 }
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -183,46 +242,61 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === "diagnose_mobile_error") {
-      const { logs } = await fetchFromPhone("/logs");
-      const errorEntry = [...logs].reverse().find((entry) => entry.level === "error");
+      const [{ crashes }, { logs }] = await Promise.all([
+        fetchFromPhone("/crashes").catch(() => ({ crashes: [] })),
+        fetchFromPhone("/logs"),
+      ]);
 
-      if (!errorEntry) {
+      // crashes[] is already newest-first (unshift on capture).
+      const latestCrash = crashes && crashes.length > 0 ? crashes[0] : null;
+      const latestErrorLog = [...logs].reverse().find((entry) => entry.level === "error");
+      const crashTime = latestCrash ? Date.parse(latestCrash.timestamp) : -Infinity;
+      const logTime = latestErrorLog ? Date.parse(latestErrorLog.timestamp) : -Infinity;
+
+      if (!latestCrash && !latestErrorLog) {
         return {
           content: [
             {
               type: "text",
-              text: "No errors recorded. No log entry with level 'error' was found on the device.",
+              text: "Nothing to diagnose yet. No crash was captured and no log entry with level 'error' was found on the device.",
             },
           ],
         };
       }
 
-      const message = errorEntry.message || "";
-      let likelyCause = "unknown";
-      let suggestion = "inspect the message and device state below for clues";
-
-      if (/timeout/i.test(message)) {
-        likelyCause = "network timeout";
-        suggestion = "network timeout — check connectivity or API responsiveness";
-      } else if (/404/.test(message)) {
-        likelyCause = "endpoint not found";
-        suggestion = "endpoint not found — check the URL/route";
-      } else if (/enotfound|dns/i.test(message)) {
-        likelyCause = "DNS/host resolution failure";
-        suggestion = "DNS/host resolution failure";
-      } else if (/network/i.test(message) || /fetch/i.test(message)) {
-        likelyCause = "network request failed";
-        suggestion = "network request failed";
-      } else {
-        likelyCause = "unclear from message alone";
+      // A real captured crash (with a stack trace) is always more useful than
+      // a plain log message when both exist - only fall back to the log path
+      // when it's actually the more recent event.
+      if (latestCrash && crashTime >= logTime) {
+        const { likelyCause, suggestion } = categorizeErrorMessage(latestCrash.message || "");
+        const diagnosis = {
+          found: true,
+          diagnosedFrom: "crash",
+          errorMessage: latestCrash.message,
+          source: latestCrash.source,
+          isFatal: latestCrash.isFatal,
+          recoveredFromDisk: !!latestCrash.recoveredFromDisk,
+          occurredAt: latestCrash.timestamp,
+          device: latestCrash.device,
+          topStackFrames: parseTopStackFrames(latestCrash.stack),
+          componentStack: latestCrash.componentStack ?? null,
+          breadcrumbsBeforeCrash: latestCrash.breadcrumbs ?? [],
+          likelyCause,
+          suggestion,
+        };
+        return {
+          content: [{ type: "text", text: JSON.stringify(diagnosis, null, 2) }],
+        };
       }
 
+      const { likelyCause, suggestion } = categorizeErrorMessage(latestErrorLog.message || "");
       const diagnosis = {
         found: true,
-        errorMessage: errorEntry.message,
-        source: errorEntry.source,
-        occurredAt: errorEntry.timestamp,
-        device: errorEntry.device,
+        diagnosedFrom: "log",
+        errorMessage: latestErrorLog.message,
+        source: latestErrorLog.source,
+        occurredAt: latestErrorLog.timestamp,
+        device: latestErrorLog.device,
         likelyCause,
         suggestion,
       };
@@ -290,6 +364,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
       return {
         content: [{ type: "text", text: JSON.stringify({ reports }, null, 2) }],
+      };
+    }
+
+    if (name === "get_mobile_crash_logs") {
+      const { crashes } = await fetchFromPhone("/crashes");
+      if (!crashes || crashes.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "No crashes captured. The app hasn't hit an uncaught exception, render error, or unhandled promise rejection since it started (or since the last time crashes were flushed).",
+            },
+          ],
+        };
+      }
+      const categorized = crashes.map((c) => ({ ...c, ...categorizeErrorMessage(c.message || "") }));
+      return {
+        content: [{ type: "text", text: JSON.stringify({ crashes: categorized }, null, 2) }],
       };
     }
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  Alert,
   SafeAreaView,
   ScrollView,
   Share,
@@ -16,6 +17,10 @@ import {
   stopPulseServer,
   setCurrentRoute,
   recordLog,
+  PulseCrashBoundary,
+  debugListPersistedCrashKeys,
+  getCrashes,
+  getBreadcrumbs,
   startSessionRecording,
   stopSessionRecording,
   recordStep,
@@ -35,6 +40,14 @@ const PROMPT_GROUPS = [
       { text: "Show me the latest app logs", tool: "get_mobile_app_logs" },
       { text: "Show me only the error logs", tool: "get_mobile_app_logs" },
       { text: "Diagnose the last error in my app", tool: "diagnose_mobile_error" },
+    ],
+  },
+  {
+    label: "CRASHES",
+    prompts: [
+      { text: "Show me my crash logs", tool: "get_mobile_crash_logs" },
+      { text: "Did my app crash?", tool: "get_mobile_crash_logs" },
+      { text: "Why did my app crash?", tool: "diagnose_mobile_error" },
     ],
   },
   {
@@ -195,6 +208,11 @@ function HomeTab({
   logNetworkError,
   toggleRecording,
   toggleBridge,
+  triggerTestCrash,
+  triggerRenderCrash,
+  triggerUnhandledRejection,
+  checkPersistedCrashes,
+  triggerRealNetworkCalls,
 }) {
   return (
     <>
@@ -281,6 +299,35 @@ function HomeTab({
         </TouchableOpacity>
       </View>
 
+      <SectionLabel theme={theme}>CRASH TEST LAB (DEV ONLY)</SectionLabel>
+      <Card theme={theme} style={{ borderColor: theme.danger, borderStyle: "dashed" }}>
+        <Text style={[styles.actionSubtitle, { color: theme.textMuted, marginBottom: 12 }]}>
+          Each button below exercises a different real crash path — none of these are fabricated
+          log messages. Ask your IDE "Show me my crash logs" afterward to see
+          get_mobile_crash_logs pick them up for real.
+        </Text>
+        <TouchableOpacity activeOpacity={0.75} onPress={triggerTestCrash} style={[styles.crashLabButton, { backgroundColor: theme.dangerSoft }]}>
+          <Text style={[styles.crashLabButtonTitle, { color: theme.danger }]}>💥 Throw in an event handler</Text>
+          <Text style={[styles.logMeta, { color: theme.textMuted }]}>caught by ErrorUtils</Text>
+        </TouchableOpacity>
+        <TouchableOpacity activeOpacity={0.75} onPress={triggerRenderCrash} style={[styles.crashLabButton, { backgroundColor: theme.dangerSoft }]}>
+          <Text style={[styles.crashLabButtonTitle, { color: theme.danger }]}>💥 Crash during render</Text>
+          <Text style={[styles.logMeta, { color: theme.textMuted }]}>caught by ErrorBoundary</Text>
+        </TouchableOpacity>
+        <TouchableOpacity activeOpacity={0.75} onPress={triggerUnhandledRejection} style={[styles.crashLabButton, { backgroundColor: theme.dangerSoft }]}>
+          <Text style={[styles.crashLabButtonTitle, { color: theme.danger }]}>💥 Reject a promise, uncaught</Text>
+          <Text style={[styles.logMeta, { color: theme.textMuted }]}>caught by rejection tracker</Text>
+        </TouchableOpacity>
+        <TouchableOpacity activeOpacity={0.75} onPress={checkPersistedCrashes} style={[styles.crashLabButton, { backgroundColor: theme.accentSoft }]}>
+          <Text style={[styles.crashLabButtonTitle, { color: theme.accent }]}>🔍 Check disk vs. in-memory status</Text>
+          <Text style={[styles.logMeta, { color: theme.textMuted }]}>verifies persistence</Text>
+        </TouchableOpacity>
+        <TouchableOpacity activeOpacity={0.75} onPress={triggerRealNetworkCalls} style={[styles.crashLabButton, { backgroundColor: theme.accentSoft, marginBottom: 0 }]}>
+          <Text style={[styles.crashLabButtonTitle, { color: theme.accent }]}>🌐 Make 2 real network calls (1 ok, 1 fails)</Text>
+          <Text style={[styles.logMeta, { color: theme.textMuted }]}>verifies network breadcrumbs</Text>
+        </TouchableOpacity>
+      </Card>
+
       <SectionLabel theme={theme}>BUG REPORT RECORDING</SectionLabel>
       <TouchableOpacity activeOpacity={0.9} onPress={toggleRecording}>
         <Card
@@ -331,6 +378,104 @@ function reportToText(report) {
     ...report.logs.map((l) => `[${l.level}] ${l.source}: ${l.message}`),
   ];
   return lines.join("\n");
+}
+
+function crashToText(crash) {
+  const lines = [
+    `Crash #${crash.id}${crash.isFatal ? " (fatal)" : ""}`,
+    new Date(crash.timestamp).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }),
+    `Source: ${crash.source}`,
+    "",
+    crash.message,
+    "",
+    "Stack trace:",
+    crash.stack ?? "(none)",
+    "",
+    `Breadcrumbs leading up to it (${crash.breadcrumbs?.length ?? 0}):`,
+    ...(crash.breadcrumbs ?? []).map((b) => `[${b.type}] ${b.message}`),
+  ];
+  return lines.join("\n");
+}
+
+function CrashDetail({ theme, crash, onBack }) {
+  function share() {
+    Share.share({
+      title: `Crash #${crash.id}`,
+      message: crashToText(crash),
+    });
+  }
+
+  return (
+    <>
+      <View style={styles.detailHeaderRow}>
+        <TouchableOpacity activeOpacity={0.7} onPress={onBack} style={styles.backRow}>
+          <Text style={[styles.backChevron, { color: theme.accent }]}>‹</Text>
+          <Text style={[styles.backLabel, { color: theme.accent }]}>All crashes</Text>
+        </TouchableOpacity>
+        <TouchableOpacity activeOpacity={0.7} onPress={share} style={[styles.shareButton, { backgroundColor: theme.track }]}>
+          <Text style={[styles.shareIcon, { color: theme.accent }]}>⬆</Text>
+        </TouchableOpacity>
+      </View>
+
+      <Text style={[styles.title, { color: theme.text, fontSize: 22, marginTop: 12 }]}>
+        Crash #{crash.id}
+      </Text>
+      <Text style={[styles.tagline, { color: theme.textMuted }]}>
+        {new Date(crash.timestamp).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })} ·{" "}
+        {crash.source}
+        {crash.recoveredFromDisk ? " · recovered after restart" : ""}
+      </Text>
+
+      <SectionLabel theme={theme}>MESSAGE</SectionLabel>
+      <Card theme={theme}>
+        <Text style={[styles.eventMessage, { color: theme.danger, fontWeight: "700" }]}>{crash.message}</Text>
+      </Card>
+
+      <SectionLabel theme={theme}>DEVICE AT TIME OF CRASH</SectionLabel>
+      <Card theme={theme}>
+        <View style={styles.statusRow}>
+          <View style={styles.statusItem}>
+            <Text style={[styles.statusLabel, { color: theme.textFaint }]}>SCREEN</Text>
+            <Text style={[styles.statusValue, { color: theme.text }]}>{crash.device?.activeRoute ?? "Unknown"}</Text>
+          </View>
+          <View style={[styles.statusDivider, { backgroundColor: theme.border }]} />
+          <View style={styles.statusItem}>
+            <Text style={[styles.statusLabel, { color: theme.textFaint }]}>BATTERY</Text>
+            <Text style={[styles.statusValue, { color: theme.text }]}>{crash.device?.batteryLevel ?? "—"}</Text>
+          </View>
+        </View>
+      </Card>
+
+      <SectionLabel theme={theme}>BREADCRUMBS ({crash.breadcrumbs?.length ?? 0})</SectionLabel>
+      <Card theme={theme} style={{ padding: 0, overflow: "hidden" }}>
+        {!crash.breadcrumbs || crash.breadcrumbs.length === 0 ? (
+          <Text style={[styles.emptyState, { color: theme.textFaint }]}>No breadcrumbs captured before this crash.</Text>
+        ) : (
+          crash.breadcrumbs.map((b, i) => (
+            <View
+              key={i}
+              style={[
+                styles.eventRow,
+                i !== crash.breadcrumbs.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.border },
+              ]}
+            >
+              <View style={[styles.eventDot, { backgroundColor: b.type === "network" ? theme.accent : theme.textFaint }]} />
+              <Text style={[styles.eventMessage, { color: theme.text }]} numberOfLines={2}>
+                {b.message}
+              </Text>
+            </View>
+          ))
+        )}
+      </Card>
+
+      <SectionLabel theme={theme}>STACK TRACE</SectionLabel>
+      <Card theme={theme}>
+        <Text style={[styles.stackText, { color: theme.textMuted }]} numberOfLines={12}>
+          {crash.stack ?? "(no stack trace available)"}
+        </Text>
+      </Card>
+    </>
+  );
 }
 
 function ReportDetail({ theme, report, onBack }) {
@@ -398,11 +543,15 @@ function ReportDetail({ theme, report, onBack }) {
   );
 }
 
-function LogTab({ theme, logs, savedReports, bridgeOnline }) {
+function LogTab({ theme, logs, savedReports, crashes, bridgeOnline }) {
   const [selectedReport, setSelectedReport] = useState(null);
+  const [selectedCrash, setSelectedCrash] = useState(null);
 
   if (selectedReport) {
     return <ReportDetail theme={theme} report={selectedReport} onBack={() => setSelectedReport(null)} />;
+  }
+  if (selectedCrash) {
+    return <CrashDetail theme={theme} crash={selectedCrash} onBack={() => setSelectedCrash(null)} />;
   }
 
   return (
@@ -437,6 +586,43 @@ function LogTab({ theme, logs, savedReports, bridgeOnline }) {
                 </Text>
               </View>
             </View>
+          ))
+        )}
+      </Card>
+
+      <SectionLabel theme={theme}>CRASHES ({crashes.length})</SectionLabel>
+      <Card theme={theme} style={{ padding: 0, overflow: "hidden" }}>
+        {crashes.length === 0 ? (
+          <Text style={[styles.emptyState, { color: theme.textFaint }]}>
+            None captured. Uncaught exceptions, render errors, and unhandled promise rejections
+            show up here automatically - no recording needed.
+          </Text>
+        ) : (
+          crashes.map((c, i) => (
+            <TouchableOpacity
+              key={c.id}
+              activeOpacity={0.7}
+              onPress={() => setSelectedCrash(c)}
+              style={[
+                styles.reportRow,
+                i !== crashes.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.border },
+              ]}
+            >
+              <View style={[styles.stepBadge, { backgroundColor: theme.dangerSoft }]}>
+                <Text style={[styles.stepBadgeText, { color: theme.danger }]}>💥</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.recordTitle, { color: theme.text, fontSize: 14 }]} numberOfLines={1}>
+                  {c.message}
+                </Text>
+                <Text style={[styles.actionSubtitle, { color: theme.textMuted }]}>
+                  {c.source}
+                  {c.recoveredFromDisk ? " · recovered" : ""} ·{" "}
+                  {new Date(c.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </Text>
+              </View>
+              <Text style={[styles.chevron, { color: theme.textFaint }]}>›</Text>
+            </TouchableOpacity>
           ))
         )}
       </Card>
@@ -498,14 +684,16 @@ function AskIdeTab({ theme, bridgeOnline }) {
   );
 }
 
-export default function App() {
+function App() {
   const theme = useTheme();
   const [activeTab, setActiveTab] = useState("home");
   const [recording, setRecording] = useState(false);
   const [steps, setSteps] = useState([]);
   const [logs, setLogs] = useState([]);
   const [savedReports, setSavedReports] = useState([]);
+  const [crashes, setCrashes] = useState([]);
   const [bridgeOnline, setBridgeOnline] = useState(true);
+  const [causeRenderCrash, setCauseRenderCrash] = useState(false);
 
   const activeTabMeta = TABS.find((t) => t.id === activeTab);
 
@@ -513,6 +701,23 @@ export default function App() {
     if (__DEV__) startPulseServer();
     setCurrentRoute(activeTabMeta.routeId);
   }, []);
+
+  // Crashes are captured outside React's state (global error handlers), so
+  // they don't trigger a re-render on their own - refresh from the live
+  // in-memory store whenever the Log tab is opened.
+  useEffect(() => {
+    if (activeTab === "log") {
+      setCrashes([...getCrashes()]);
+    }
+  }, [activeTab]);
+
+  // Deliberately throws DURING render (not inside an event handler), so it's
+  // only catchable by the ErrorBoundary above, not by ErrorUtils (Task A1).
+  if (causeRenderCrash) {
+    const undefinedThing = undefined;
+    // eslint-disable-next-line no-unused-expressions
+    undefinedThing.property;
+  }
 
   function pushStep(description) {
     if (!recording) return;
@@ -543,6 +748,51 @@ export default function App() {
     recordLog(message, "error", "NetworkClient");
     pushLog("error", message, "NetworkClient");
     pushStep("Sync failed: request timed out after 3000ms");
+  }
+
+  function triggerTestCrash() {
+    throw new Error("Test crash from HomeTab (Task A1 verification) — undefined is not an object");
+  }
+
+  function triggerRenderCrash() {
+    setCauseRenderCrash(true);
+  }
+
+  function triggerUnhandledRejection() {
+    // Deliberately not awaited/caught - simulates a real "fire and forget"
+    // async call (e.g. an analytics ping) whose failure nobody handles.
+    Promise.reject(new Error("Test unhandled promise rejection (Task A3 verification)"));
+  }
+
+  async function checkPersistedCrashes() {
+    const keys = await debugListPersistedCrashKeys();
+    const inMemory = getCrashes();
+    const recovered = inMemory.filter((c) => c.recoveredFromDisk);
+    Alert.alert(
+      "Crash storage status",
+      `Pending on disk (not yet flushed): ${keys.length}\n` +
+        `In-memory crashes: ${inMemory.length}\n` +
+        `  - recovered from a previous session: ${recovered.length}\n` +
+        `  - captured live this session: ${inMemory.length - recovered.length}`
+    );
+  }
+
+  async function triggerRealNetworkCalls() {
+    // One real request that succeeds, one to a host that can't resolve -
+    // both go through the patched global.fetch, so both should show up as
+    // breadcrumbs automatically, with no recordLog() call anywhere here.
+    fetch("https://jsonplaceholder.typicode.com/todos/1").catch(() => {});
+    fetch("https://this-domain-does-not-exist.pulsemcp-test.invalid/api").catch(() => {});
+
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+
+    const recent = getBreadcrumbs().slice(-6);
+    Alert.alert(
+      "Recent breadcrumbs",
+      recent.length === 0
+        ? "None yet."
+        : recent.map((b) => `[${b.type}] ${b.message}`).join("\n\n")
+    );
   }
 
   function toggleRecording() {
@@ -583,10 +833,15 @@ export default function App() {
             logNetworkError={logNetworkError}
             toggleRecording={toggleRecording}
             toggleBridge={toggleBridge}
+            triggerTestCrash={triggerTestCrash}
+            triggerRenderCrash={triggerRenderCrash}
+            triggerUnhandledRejection={triggerUnhandledRejection}
+            checkPersistedCrashes={checkPersistedCrashes}
+            triggerRealNetworkCalls={triggerRealNetworkCalls}
           />
         )}
         {activeTab === "log" && (
-          <LogTab theme={theme} logs={logs} savedReports={savedReports} bridgeOnline={bridgeOnline} />
+          <LogTab theme={theme} logs={logs} savedReports={savedReports} crashes={crashes} bridgeOnline={bridgeOnline} />
         )}
         {activeTab === "ask" && <AskIdeTab theme={theme} bridgeOnline={bridgeOnline} />}
       </ScrollView>
@@ -614,6 +869,14 @@ export default function App() {
   );
 }
 
+export default function AppRoot() {
+  return (
+    <PulseCrashBoundary>
+      <App />
+    </PulseCrashBoundary>
+  );
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1 },
   scroll: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 40 },
@@ -632,6 +895,16 @@ const styles = StyleSheet.create({
   liveDot: { width: 8, height: 8, borderRadius: 4 },
   sectionLabel: { fontSize: 11, fontWeight: "700", letterSpacing: 0.8, marginTop: 28, marginBottom: 10 },
   actionRow: { flexDirection: "row", gap: 10 },
+  crashLabButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 8,
+  },
+  crashLabButtonTitle: { fontSize: 14, fontWeight: "700", flexShrink: 1, marginRight: 8 },
   actionCard: { flex: 1, borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, padding: 14 },
   actionIcon: { fontSize: 18, fontWeight: "800", marginBottom: 8 },
   actionTitle: { fontSize: 14, fontWeight: "700" },
@@ -643,6 +916,9 @@ const styles = StyleSheet.create({
   chevron: { fontSize: 20, fontWeight: "300" },
   emptyState: { fontSize: 13, textAlign: "center", paddingVertical: 28, paddingHorizontal: 16 },
   eventMessage: { fontSize: 13, fontWeight: "500", flex: 1 },
+  eventRow: { flexDirection: "row", alignItems: "center", paddingVertical: 12, paddingHorizontal: 14, gap: 10 },
+  eventDot: { width: 7, height: 7, borderRadius: 3.5 },
+  stackText: { fontSize: 11, fontFamily: "Courier", lineHeight: 16 },
   stepRow: { flexDirection: "row", alignItems: "center", paddingVertical: 12, paddingHorizontal: 14, gap: 12 },
   stepBadge: { width: 22, height: 22, borderRadius: 11, alignItems: "center", justifyContent: "center" },
   stepBadgeText: { fontSize: 12, fontWeight: "700" },

@@ -48,6 +48,7 @@ This file is not part of the MCP server process — it's source code meant to be
   - The high-level **`BridgeServer`** class — `server.get(path, (request, response) => ...)`, `response.json(obj)`, `server.listen(port)`. This is what `mobile-app-server.js` actually uses; it handles request-ID tracking and JSON serialization correctly.
 - **`react-native-device-info`** — supplies `getBatteryLevel()`, `getSystemVersion()` (OS version), `getVersion()`/`getBuildNumber()` (app version).
 - **`react-native-view-shot`** — supplies `captureScreen({ format, quality, result: 'base64' })`, used for the screenshot tool. Captures whatever is currently on screen, natively, without a ref to any specific view.
+- **`@react-native-async-storage/async-storage`** — the only piece of state here that's persisted to disk rather than kept purely in memory. Used exclusively by crash capture (see below) so a crash survives even if it kills the JS engine before anything else could report it.
 
 ### Routes exposed on port 8080
 
@@ -57,8 +58,26 @@ This file is not part of the MCP server process — it's source code meant to be
 | `GET /logs` | `{ logs: [{ id, timestamp, level, source, message, device }, ...] }` | In-memory ring buffer (`recentLogs`, capped at 100 entries), fed by calling `recordLog(message, level, source)` anywhere in the app; each entry carries a synchronous device snapshot (cached battery level, no per-call `DeviceInfo` await) |
 | `GET /screenshot` | `{ image: <base64>, mimeType: "image/png" }` | `react-native-view-shot` |
 | `GET /session` | `{ recording: bool, steps: [...] }` | In-memory step list, fed by `recordStep(...)`, only active between `startSessionRecording()`/`stopSessionRecording()` |
+| `GET /reports` | `{ reports: [...] }` | All bug reports auto-saved by `stopSessionRecording()` |
+| `GET /crashes` | `{ crashes: [{ id, timestamp, isFatal, message, stack, componentStack, source, device, breadcrumbs, recoveredFromDisk? }, ...] }` | In-memory ring buffer (capped at 20), fed automatically by three capture paths — see "Crash capture & breadcrumbs" below |
 
-All in-memory state (`recentLogs`, `sessionSteps`, `currentRouteName`) lives in that one JS module and is lost whenever the app process restarts — there's no persistence to disk. That's a deliberate simplicity tradeoff, not an oversight.
+Most in-memory state (`recentLogs`, `sessionSteps`, `currentRouteName`, `breadcrumbs`) lives in that one JS module and is lost whenever the app process restarts — a deliberate simplicity tradeoff for those. **Crashes are the one exception**: they're persisted to `AsyncStorage` the instant they're captured and recovered on the next launch if the process died before anything else could report them.
+
+### Crash capture & breadcrumbs
+
+Three independent capture paths, registered at module load time (not inside `startPulseServer()`, so they're active as early as possible):
+
+| Failure path | Caught by | `source` value |
+|---|---|---|
+| Uncaught exception in an event handler or async code | `global.ErrorUtils.setGlobalHandler` (wraps, doesn't replace, the previous handler) | `uncaught-exception` |
+| A crash during React's render phase | A root `ErrorBoundary` around the whole app (`App.js` in the demo app); calls `recordCrash()` with `componentStack` | `render-error-boundary` |
+| A rejected promise nobody `.catch()`'d | `global.HermesInternal.enablePromiseRejectionTracker` (falls back to the `promise` package's tracker on JSC) | `unhandled-promise-rejection` |
+
+Every captured crash also gets a snapshot of the current **breadcrumb trail** attached (`breadcrumbs: [...]`, oldest first, capped at 20) — built automatically from:
+- `setCurrentRoute()` calls (navigation), deduped so setting the same route twice in a row is a no-op
+- a monkey-patched `global.fetch` that logs every request's method/URL/status/duration on success or failure; requests to `localhost`/`127.0.0.1` (Metro's own dev tooling, e.g. source map symbolication) are filtered out as noise
+
+**Persistence sequence** (`persistCrash()` inside `captureCrash()`): the very first thing that happens on any crash is a fire-and-forget `AsyncStorage.setItem()` under a crash-specific key (`@pulse-mcp/pending-crash/<id>-<timestamp>`) — before the crash is even pushed into the in-memory list. Each crash gets its own key rather than one shared array key, so two crashes happening close together never race on a read-modify-write. On the next `startPulseServer()`/module load, `flushPendingCrashesFromDisk()` reads back any keys under that prefix, merges them into the in-memory list tagged `recoveredFromDisk: true`, and deletes them from storage so they aren't flushed again.
 
 ## Component 3: the MCP tools
 
@@ -69,14 +88,16 @@ Each tool is a thin wrapper: fetch one (or two) routes from the phone, reshape t
 | `get_mobile_device_status` | Battery, screen, platform, OS/app version, connectedAt | `GET /status` |
 | `get_mobile_app_logs` | Recent structured console/network logs, optionally filtered by `level` (info/success/error) | `GET /logs` |
 | `check_mobile_connection` | Friendly human-readable "is it alive" summary plus raw status JSON, or a clean unreachable error | `GET /status` |
-| `diagnose_mobile_error` | Finds the most recent `error`-level log entry and derives a `likelyCause`/`suggestion` from the message text (timeout/404/DNS/network heuristics) | `GET /logs` |
+| `diagnose_mobile_error` | Diagnoses the most recent problem — a captured crash if one exists and is newer than the latest error-level log, otherwise falls back to the log. Returns `likelyCause`/`suggestion`, plus `topStackFrames`/`componentStack`/`breadcrumbsBeforeCrash` when the diagnosis came from a crash | `GET /crashes` + `GET /logs` |
 | `get_mobile_screenshot` | Live screenshot as an inline image | `GET /screenshot` — returned as an MCP `image` content block (not text) |
 | `get_standup_snapshot` | Device status + today's git commits combined | `GET /status` + local `git log` |
 | `get_bug_report` | Numbered repro-steps sequence + likely failure point + device context | `GET /session` + `GET /status` |
+| `get_saved_bug_reports` | All auto-saved bug reports | `GET /reports` |
+| `get_mobile_crash_logs` | All captured crashes, each annotated with a `likelyCause`/`suggestion` from the same categorization heuristic `diagnose_mobile_error` uses | `GET /crashes` |
 
 `get_bug_report` is the most composed tool: it fetches the step recording, finds the last step, checks it against `/error|fail|fatal|exception/i` to guess where things broke, and merges in device/build info from `/status` — all without the tester having to write up "steps to reproduce" by hand.
 
-`diagnose_mobile_error` is similar in spirit but works off structured logs instead of step recordings: it walks `/logs` backwards for the newest `level: "error"` entry, then pattern-matches the message text (`/timeout/i`, `/404/`, `ENOTFOUND`/DNS, `/network|fetch/i`) to suggest a likely cause, falling back to "inspect the message and device state below for clues" when nothing matches.
+`diagnose_mobile_error` picks whichever of "the latest captured crash" or "the latest error-level log entry" is more recent by timestamp, then runs `categorizeErrorMessage()` (shared with `get_mobile_crash_logs`) against its message — pattern-matching for null/undefined property access, "is not a function", timeout, 404, DNS/ENOTFOUND, generic network/fetch failure, and permission-denied — falling back to "inspect the stack trace and breadcrumbs below for clues" when nothing matches. When the diagnosis came from a crash, `parseTopStackFrames()` also extracts function name + line/column from the first few stack frames, stripping away the long bundler query-string URLs Metro embeds in dev-mode stack traces.
 
 ## End-to-end request lifecycle (example: `get_mobile_device_status`)
 
@@ -104,7 +125,9 @@ If step 5 fails (phone unreachable), step 8 instead returns `isError: true` with
 
 1. **Wrong API usage crashed the native bridge on every request.** The original `mobile-app-server.js` used the low-level `httpBridge.start/respond` API assuming an Express-style `(request, response)` callback that doesn't exist at that level — only a single `request` object is passed, and `respond()` needs a `requestId` string plus a JSON *string* body, not a raw object. This threw a real native `NSException` (`key cannot be nil`) on every call. Fixed by switching to the library's `BridgeServer` class, which handles all of this correctly. Verified against a real Expo build on the iOS Simulator.
 2. **Native module version mismatches.** `react-native-view-shot` and `expo-clipboard` both needed versions matched to the project's Expo SDK (installed via `npx expo install <package>`, not plain `npm install`) — installing the latest version of either broke the native build or crashed at runtime with "Cannot find native module."
-3. **Simulator battery is always -100%.** `DeviceInfo.getBatteryLevel()` is unsupported on the iOS Simulator by design; real devices report a real percentage.
+3. **Simulator battery is always -100%.** `DeviceInfo.getBatteryLevel()` is unsupported on the iOS Simulator by design; real devices report a real percentage. Fixed by clamping any negative reading to a placeholder (`formatBatteryLevel()`) rather than showing `-100%`.
+4. **Adding any new native module (e.g. `@react-native-async-storage/async-storage`) needs a full clean rebuild, not just `pod install`.** An incremental `expo run:ios` after installing a new native dependency intermittently failed with "Cannot find native module" even though the pod was installed correctly — the fix was deleting `~/Library/Developer/Xcode/DerivedData/<app>-*` and rebuilding from scratch. Budget for this every time a new native dependency is added, not just the first one.
+5. **Wrapping the root component in an `ErrorBoundary` changes what `registerRootComponent()` sees.** Splitting the default export into a separate `AppRoot` wrapper (`<ErrorBoundary><App /></ErrorBoundary>`) is straightforward, but doing it as several small edits in sequence can leave a moment with no valid default export at all, which Metro happily bundles into a runtime "Element type is invalid... got: object" error. Make the export-restructuring edit atomic, or expect a transient error on the next Fast Refresh that resolves once the file is internally consistent again.
 
 ## Summary of all libraries used
 
@@ -116,4 +139,5 @@ If step 5 fails (phone unreachable), step 8 instead returns `isError: true` with
 | `react-native-http-bridge-refurbished` | `mobile-app-server.js` | In-app HTTP server (native GCDWebServer/NanoHTTPD wrapper) |
 | `react-native-device-info` | `mobile-app-server.js` | Battery, OS version, app version/build |
 | `react-native-view-shot` | `mobile-app-server.js` | Screenshot capture |
+| `@react-native-async-storage/async-storage` | `mobile-app-server.js` | Persists crashes to disk so they survive the process dying |
 | `expo-clipboard` | demo/test app only, not the core bridge | Tap-to-copy prompts in the demo UI |
