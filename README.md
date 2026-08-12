@@ -74,6 +74,24 @@ See `mcp-config.example.json` for ready-to-paste config blocks for Cursor, Claud
 - **Real Android — not yet verified**, though it should work in principle (`react-native-http-bridge-refurbished` supports Android too). Android 9+ blocks plaintext HTTP by default, so you'll likely need `android:usesCleartextTraffic="true"` in `AndroidManifest.xml` for local dev builds, or the bridge will silently fail to connect.
 - **Android emulator**: since it's NAT'd and can't be reached directly, use `127.0.0.1` plus `adb forward tcp:8080 tcp:8080`.
 
+### Running `demo-app` on a real iPhone
+
+`demo-app/ios` is checked in with **manual signing** (`CODE_SIGN_STYLE = Manual`, provisioning profile `IndiaNIC-WildCard-Development`, team `7BCW99KL8P`, certificate `Apple Development: Manish Manish`) — this is intentional, not a misconfiguration, so don't "fix" it by switching to Automatic. `npx expo run:ios --device <udid>` doesn't handle manual signing well, so build/install directly with the Apple toolchain instead:
+
+```bash
+cd demo-app/ios
+xcrun xctrace list devices                      # find your device's UDID (must show under "Devices", not "Devices Offline" — plug in + unlock + trust first)
+
+xcodebuild -workspace demoapp.xcworkspace -scheme demoapp -configuration Debug \
+  -destination "id=<UDID>" build
+
+APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData/demoapp-*/Build/Products/Debug-iphoneos -maxdepth 1 -name "*.app")
+xcrun devicectl device install app --device <UDID> "$APP_PATH"
+xcrun devicectl device process launch --device <UDID> com.indianic.pulse
+```
+
+If `xcodebuild` errors with `conflicting provisioning settings` or `No profiles for 'com.indianic.pulse' were found`, the project's signing got out of sync with Xcode's UI state — open `demoapp.xcodeproj` in Xcode, go to the `demoapp` target's **Signing & Capabilities** tab, and re-select the `IndiaNIC-WildCard-Development` profile there (this rewrites `project.pbxproj` correctly). Don't hand-edit `project.pbxproj` signing fields — let Xcode do it.
+
 ## Available MCP tools
 
 | Tool | Description |
@@ -87,6 +105,22 @@ See `mcp-config.example.json` for ready-to-paste config blocks for Cursor, Claud
 | `get_bug_report` | The current/live step recording (see below) plus device context, for reproducing a bug in progress |
 | `get_saved_bug_reports` | All bug reports auto-saved on the device, each with its full steps, logs, and device info snapshot |
 | `get_mobile_crash_logs` | All crashes automatically captured on the device (see "Automatic crash capture" below), each with a stack trace, breadcrumb trail, and a best-guess `likelyCause`/`suggestion` |
+
+### Example prompts
+
+Copy-paste any of these into Claude to trigger the matching tool:
+
+| Tool | Example prompt |
+|---|---|
+| `check_mobile_connection` | "Check my mobile connection" |
+| `get_mobile_device_status` | "What's the current status of my device?" |
+| `get_mobile_app_logs` | "Show me the recent app logs from my phone." |
+| `get_mobile_crash_logs` | "Show me any crash logs from the mobile app." |
+| `get_mobile_screenshot` | "Take a screenshot of my phone's current screen." |
+| `diagnose_mobile_error` | "The app crashed on the login screen, can you diagnose why?" |
+| `get_bug_report` | "Get the current bug report / step recording." |
+| `get_saved_bug_reports` | "List all saved bug reports." |
+| `get_standup_snapshot` | "Give me a standup snapshot." |
 
 ### Bug-report step recording
 
