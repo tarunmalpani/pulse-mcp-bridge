@@ -1,0 +1,14 @@
+{
+  "name": "pulse-mcp-relay",
+  "version": "1.0.0",
+  "description": "Always-on relay between a remote mobile app and pulse-mcp's index.js, so status/logs/crashes/reports/session reach the MCP server over HTTPS instead of requiring a shared LAN.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "express": "^4.19.2"
+  }
+}

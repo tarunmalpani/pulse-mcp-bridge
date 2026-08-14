@@ -1,0 +1,85 @@
+name: Automated crash/bug-report fix
+
+# Fired by relay-server/lib/githubDispatch.js whenever the relay receives a
+# new crash or a new saved bug report from a device, after its own de-dupe
+# cooldown check. See the "Automated crash-fix pipeline" section of
+# /Users/indianic/.claude/plans/adaptive-mixing-hickey.md (or ARCHITECTURE.md
+# once documented there) for the full design.
+on:
+  repository_dispatch:
+    types: [pulse-crash, pulse-bug-report, pulse-user-command]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Prepare branch name, PR title, and Claude Code prompt
+        id: vars
+        run: node .github/scripts/prepare-auto-fix.mjs
+
+      - name: Create preview branch
+        run: git checkout -b "${{ steps.vars.outputs.branch }}"
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run Claude Code headless
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          claude -p "$(cat .github/auto-fix-prompt.txt)" \
+            --permission-mode acceptEdits
+
+      - name: Clean up the prompt scratch file before diffing
+        run: rm -f .github/auto-fix-prompt.txt
+
+      - name: Check whether Claude Code made any changes
+        id: diff
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit and push
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          git config user.name "pulse-mcp-bot"
+          git config user.email "pulse-mcp-bot@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: automated ${{ steps.vars.outputs.kind }} fix"
+          git push origin "${{ steps.vars.outputs.branch }}"
+
+      - name: Open pull request
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr create \
+            --base main \
+            --head "${{ steps.vars.outputs.branch }}" \
+            --title "${{ steps.vars.outputs.title }}" \
+            --body "Opened automatically by the pulse-mcp-bridge auto-fix pipeline in response to a \`${{ steps.vars.outputs.kind }}\` event. Nothing here has been reviewed - inspect the diff carefully before merging."
+          # NOTE: no --label here - gh pr create fails if the label doesn't already
+          # exist in the repo. Create an "automated-fix" label yourself first, then
+          # add `--label automated-fix` above if you want auto-fix PRs tagged.
+
+      - name: No actionable fix found
+        if: steps.diff.outputs.changed == 'false'
+        run: echo "Claude Code made no changes for this ${{ steps.vars.outputs.kind }} event - nothing to open a PR for."

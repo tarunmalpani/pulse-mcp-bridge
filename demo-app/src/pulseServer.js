@@ -19,6 +19,11 @@
  *
  * NOTE: Your phone and your dev machine must be on the same Wi-Fi network.
  * Set MOBILE_PHONE_IP on the MCP server side to this device's local IP.
+ *
+ * OPTIONAL - remote/cross-network mode: call configurePulseRelay({ url, apiKey,
+ * deviceId }) once (alongside startPulseServer()) to also push this app's state
+ * to a hosted relay (see relay-server/), so the MCP server can reach it over
+ * HTTPS from anywhere instead of requiring the same Wi-Fi. See ARCHITECTURE.md.
  */
 
 import { Component } from "react";
@@ -93,6 +98,7 @@ export function recordLog(message, level = "info", source = "App") {
   if (recentLogs.length > MAX_LOGS) {
     recentLogs.shift();
   }
+  pushToRelay("logs", { logs: recentLogs });
 }
 
 // --- Breadcrumbs ------------------------------------------------------------
@@ -121,6 +127,7 @@ export function setCurrentRoute(routeName) {
   if (routeName === currentRouteName) return;
   currentRouteName = routeName;
   addBreadcrumb("navigation", `Navigated to ${routeName}`);
+  pushStatusToRelay();
 }
 
 // Wraps the app's real fetch calls so every network request/response becomes
@@ -203,6 +210,10 @@ function captureCrash(error, isFatal, extra = {}) {
   if (crashes.length > MAX_CRASHES) {
     crashes.length = MAX_CRASHES;
   }
+  // Second sink, right after the AsyncStorage safety net above - this is what
+  // lets a crash reach the developer even when they're not on the same
+  // network as the phone. crashes[0] is always this new crash (newest-first).
+  pushToRelay("crashes", { crashes });
   console.log(`[PulseMCP] Crash captured (isFatal=${crash.isFatal}, source=${crash.source}): ${crash.message}`);
   return crash;
 }
@@ -396,6 +407,7 @@ export function startSessionRecording() {
   sessionSteps = [];
   stepCounter = 0;
   recordLog('[Session] Recording started', 'info', 'Session');
+  pushToRelay("session", { recording: isRecording, steps: sessionSteps });
 }
 
 /**
@@ -423,6 +435,9 @@ export async function stopSessionRecording() {
   };
   savedReports.unshift(report);
   recordLog('[Session] Recording stopped - report saved', 'info', 'Session');
+  pushToRelay("session", { recording: isRecording, steps: sessionSteps });
+  pushToRelay("reports", { reports: savedReports });
+  pushNewReportToRelay(report);
   return report;
 }
 
@@ -435,11 +450,138 @@ export function recordStep(description) {
     description,
     timestamp: new Date().toISOString(),
   });
+  pushToRelay("session", { recording: isRecording, steps: sessionSteps });
 }
 
 /** All auto-saved reports, most recent first. */
 export function getSavedReports() {
   return savedReports;
+}
+
+// --- Optional cloud relay (remote / cross-network mode) ------------------
+// When configured, the app ALSO pushes its state to an always-on relay
+// service instead of relying solely on the local BridgeServer below - this
+// is what lets get_mobile_crash_logs/get_mobile_device_status etc. reach a
+// developer who isn't on the same Wi-Fi as the phone (see relay-server/).
+// Purely additive: with no relay configured, this whole section is a no-op
+// and local-only behavior is completely unchanged.
+
+let relayConfig = null; // { url, apiKey, deviceId }
+let relayHeartbeatTimer = null;
+let relayCommandPollTimer = null;
+const RELAY_HEARTBEAT_MS = 20000;
+const RELAY_COMMAND_POLL_MS = 4000;
+
+/**
+ * Call once, alongside startPulseServer(), to also start pushing state to a
+ * hosted relay: configurePulseRelay({ url: "https://your-relay.example.com",
+ * apiKey: "...", deviceId: "some-stable-id-for-this-device" }).
+ */
+export function configurePulseRelay({ url, apiKey, deviceId }) {
+  relayConfig = { url, apiKey, deviceId };
+  pushStatusToRelay();
+  if (relayHeartbeatTimer) clearInterval(relayHeartbeatTimer);
+  relayHeartbeatTimer = setInterval(pushStatusToRelay, RELAY_HEARTBEAT_MS);
+  if (relayCommandPollTimer) clearInterval(relayCommandPollTimer);
+  relayCommandPollTimer = setInterval(pollRelayCommands, RELAY_COMMAND_POLL_MS);
+}
+
+/**
+ * Fire-and-forget push to the relay - failures are swallowed. The relay is a
+ * best-effort second sink; crashes additionally have the AsyncStorage safety
+ * net above, so a failed relay push never loses data, just delays it until
+ * the next successful push (heartbeat, or next captured event).
+ */
+function pushToRelay(kind, data) {
+  if (!relayConfig) return;
+  fetch(`${relayConfig.url}/devices/${relayConfig.deviceId}/${kind}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-pulse-api-key": relayConfig.apiKey },
+    body: JSON.stringify(data),
+  }).catch((err) => {
+    console.log(`[PulseMCP] Relay push failed (${kind}): ${err?.message}`);
+  });
+}
+
+/** Whether configurePulseRelay() has been called - lets UI gate relay-only features (e.g. the "Ask IDE" command box). */
+export function isRelayConfigured() {
+  return relayConfig !== null;
+}
+
+/**
+ * Sends a free-text command/issue description typed by the user (e.g. in the
+ * app's "Ask IDE" screen) to the relay, which dispatches it to the automated
+ * fix pipeline (see relay-server/lib/githubDispatch.js and
+ * .github/workflows/auto-fix-crash.yml). Unlike the other push* functions,
+ * this is NOT fire-and-forget - the caller is a user action, so the UI needs
+ * to know whether it actually went through.
+ */
+export async function sendUserCommand(text) {
+  if (!relayConfig) {
+    throw new Error("No relay configured - call configurePulseRelay() first.");
+  }
+  recordLog(`[AskIDE] Sent command: ${text}`, "info", "AskIDE");
+  const response = await fetch(`${relayConfig.url}/devices/${relayConfig.deviceId}/user-commands`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-pulse-api-key": relayConfig.apiKey },
+    body: JSON.stringify({ text }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || !body.ok) {
+    throw new Error(body.error || `Relay returned ${response.status}`);
+  }
+  return body;
+}
+
+/** Also notifies the relay's dedicated "new report" endpoint, which is what triggers the automated bug-report-fix pipeline (see relay-server/). */
+function pushNewReportToRelay(report) {
+  if (!relayConfig) return;
+  fetch(`${relayConfig.url}/devices/${relayConfig.deviceId}/reports/new`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-pulse-api-key": relayConfig.apiKey },
+    body: JSON.stringify(report),
+  }).catch((err) => {
+    console.log(`[PulseMCP] Relay new-report notify failed: ${err?.message}`);
+  });
+}
+
+async function pushStatusToRelay() {
+  if (!relayConfig) return;
+  const batteryLevel = await DeviceInfo.getBatteryLevel().catch(() => -1);
+  lastKnownBatteryLevel = formatBatteryLevel(batteryLevel);
+  pushToRelay("status", {
+    status: "online",
+    batteryLevel: lastKnownBatteryLevel,
+    platform: Platform.OS,
+    osVersion: DeviceInfo.getSystemVersion(),
+    appVersion: DeviceInfo.getVersion(),
+    buildNumber: DeviceInfo.getBuildNumber(),
+    activeRoute: currentRouteName,
+    connectedAt,
+  });
+}
+
+/** Polls the relay for on-demand commands (currently just "screenshot") and fulfills them. */
+async function pollRelayCommands() {
+  if (!relayConfig) return;
+  try {
+    const response = await fetch(`${relayConfig.url}/devices/${relayConfig.deviceId}/commands`, {
+      headers: { "x-pulse-api-key": relayConfig.apiKey },
+    });
+    const { commands } = await response.json();
+    for (const command of commands || []) {
+      if (command.type === "screenshot") {
+        const image = await captureScreen({ format: "png", quality: 0.8, result: "base64" }).catch(() => null);
+        fetch(`${relayConfig.url}/devices/${relayConfig.deviceId}/commands/${command.id}/result`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-pulse-api-key": relayConfig.apiKey },
+          body: JSON.stringify({ image, mimeType: "image/png" }),
+        }).catch(() => {});
+      }
+    }
+  } catch {
+    // Relay unreachable this cycle - the phone will just try again on the next poll.
+  }
 }
 
 // --- Server bootstrap ----------------------------------------------------

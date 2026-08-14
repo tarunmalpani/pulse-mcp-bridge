@@ -121,6 +121,30 @@ If step 5 fails (phone unreachable), step 8 instead returns `isError: true` with
 - **Real Android devices**: Android 9+ blocks plaintext HTTP by default; local dev builds usually need `android:usesCleartextTraffic="true"` in the manifest.
 - No authentication or encryption exists on the port 8080 bridge — it's designed for trusted local dev networks only, never for exposing over the public internet.
 
+## Component 4: the relay server (`relay-server/`, optional)
+
+Solves the case the architecture above can't: the phone and the developer's dev machine are on different networks entirely (different city, different Wi-Fi, cellular data). Instead of `index.js` reaching the phone directly over LAN, both sides talk to a small always-on Express service instead:
+
+```
+Mobile app                    relay-server (24/7, e.g. Render)                 index.js
+──────────                    ─────────────────────────────                    ────────
+POST /devices/:id/status  ──▶  upserts latest snapshot per (deviceId, kind)  ◀── GET /devices/:id/status
+POST /devices/:id/crashes ──▶  persists to SQLite + fires GitHub dispatch    ◀── GET /devices/:id/crashes
+GET  /devices/:id/commands ◀── polls for on-demand work (e.g. screenshot)    ◀── GET /devices/:id/screenshot (holds open until fulfilled)
+```
+
+**Key design choice**: the relay's `GET` routes return exactly the same JSON shapes as the phone's local routes (`/status`, `/logs`, `/crashes`, `/reports`, `/session`, `/screenshot`), just namespaced under `/devices/:deviceId/...` and behind an `x-pulse-api-key` header. This means none of `index.js`'s 9 tool handlers, `categorizeErrorMessage()`, or `parseTopStackFrames()` needed to change — only `fetchFromPhone()`'s base URL and headers change, gated on whether `PULSE_RELAY_URL` is set (see `index.js`).
+
+**Storage**: `better-sqlite3`, one row per `(deviceId, kind)` holding the latest JSON blob (`relay-server/lib/db.js`) — durable across relay restarts as long as the disk is persistent (see `relay-server/README.md` for the Render disk setup), which matters most for crashes.
+
+**On-demand tools (screenshot)**: unlike status/logs/crashes/reports/session (which the phone pushes proactively), a screenshot has to be captured live. `relay-server/lib/commandQueue.js` implements this as an in-memory poll/fulfill queue: `GET /devices/:id/screenshot` enqueues a command and blocks (up to ~10s) waiting for the phone's next `GET /devices/:id/commands` poll to pick it up and `POST` back a result. From `index.js`'s side this is indistinguishable from the direct-phone call it replaces.
+
+**Mobile app changes** (`mobile-app-server.js`): `configurePulseRelay({ url, apiKey, deviceId })` is opt-in and purely additive — the local `BridgeServer`/port 8080 path is completely untouched. Once configured, it pushes `/status` on a heartbeat + route changes, `/logs` after every `recordLog()`, `/crashes` immediately inside `captureCrash()` (right after the existing `AsyncStorage` persistence — a second, best-effort sink, not a replacement), and `/reports`/`/session` around the bug-report recording flow. It also polls `/commands` to fulfill on-demand screenshot requests.
+
+**Automated crash-fix pipeline** (optional, `relay-server/lib/githubDispatch.js` + `.github/workflows/auto-fix-crash.yml`): if `GITHUB_TOKEN`/`GITHUB_REPO` are set on the relay, every new crash or bug report — after a de-dupe check (`shouldDispatch()` in `lib/db.js`, hashing the error signature with a 1-hour cooldown, since a single bug can crash-loop many times in seconds) — fires a GitHub `repository_dispatch` event. The workflow checks out `main`, creates a `preview/*` branch, runs Claude Code headlessly with the crash's stack trace/breadcrumbs (or the bug report's repro steps/logs) as context, and opens a PR only if it actually made a change. Nothing merges automatically. Secrets are split: the relay only holds the GitHub PAT needed to fire the dispatch; `ANTHROPIC_API_KEY` lives solely in the repo's GitHub Actions secrets.
+
+**Security**: the relay is internet-exposed, unlike the LAN-only bridge it sits in front of — every route but `/health` requires the shared `x-pulse-api-key` header. There's no per-device auth beyond that shared key plus `deviceId`, so this is designed for a handful of trusted devices/testers, not a public multi-tenant service.
+
 ## Lessons learned this session (real bugs, not hypothetical)
 
 1. **Wrong API usage crashed the native bridge on every request.** The original `mobile-app-server.js` used the low-level `httpBridge.start/respond` API assuming an Express-style `(request, response)` callback that doesn't exist at that level — only a single `request` object is passed, and `respond()` needs a `requestId` string plus a JSON *string* body, not a raw object. This threw a real native `NSException` (`key cannot be nil`) on every call. Fixed by switching to the library's `BridgeServer` class, which handles all of this correctly. Verified against a real Expo build on the iOS Simulator.
@@ -141,3 +165,5 @@ If step 5 fails (phone unreachable), step 8 instead returns `isError: true` with
 | `react-native-view-shot` | `mobile-app-server.js` | Screenshot capture |
 | `@react-native-async-storage/async-storage` | `mobile-app-server.js` | Persists crashes to disk so they survive the process dying |
 | `expo-clipboard` | demo/test app only, not the core bridge | Tap-to-copy prompts in the demo UI |
+| `express` | `relay-server/` | HTTP server for the optional cloud relay |
+| `better-sqlite3` | `relay-server/` | Durable storage for pushed device state and the dispatch de-dupe table |

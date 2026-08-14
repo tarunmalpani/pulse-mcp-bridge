@@ -40,9 +40,25 @@
     }
   },
 
+  "relay_mode_example": {
+    "_file": "Use this instead of MOBILE_PHONE_IP when the phone and this MCP server are NOT on the same Wi-Fi (see relay-server/ and the \"Remote / cloud relay mode\" section of README.md)",
+    "mcpServers": {
+      "pulse-mcp": {
+        "command": "node",
+        "args": ["/absolute/path/to/pulse-mcp-bridge/index.js"],
+        "env": {
+          "PULSE_RELAY_URL": "https://your-relay.onrender.com",
+          "PULSE_API_KEY": "the-same-shared-secret-set-on-the-relay",
+          "PULSE_DEVICE_ID": "the-same-deviceId-passed-to-configurePulseRelay-in-the-app"
+        }
+      }
+    }
+  },
+
   "notes": [
     "Replace /absolute/path/to/pulse-mcp-bridge/index.js with the real path on your machine.",
     "MOBILE_PHONE_IP should be the local Wi-Fi IP address of the phone running the mobile app (see mobile-app-server.js).",
-    "If you installed pulse-mcp globally via npm link / npm i -g, you can use \"command\": \"pulse-mcp\" instead of node + args."
+    "If you installed pulse-mcp globally via npm link / npm i -g, you can use \"command\": \"pulse-mcp\" instead of node + args.",
+    "PULSE_RELAY_URL/PULSE_API_KEY/PULSE_DEVICE_ID are for remote/cross-network mode - set these instead of MOBILE_PHONE_IP, not in addition to it."
   ]
 }

@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   SafeAreaView,
   ScrollView,
   Share,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
   useColorScheme,
@@ -24,7 +26,18 @@ import {
   startSessionRecording,
   stopSessionRecording,
   recordStep,
+  configurePulseRelay,
+  sendUserCommand,
+  isRelayConfigured,
 } from "./src/pulseServer";
+
+// TEMPORARY - cross-network relay test (cloudflared quick tunnel, no auth
+// beyond the shared key below). Remove this block once the real relay
+// deployment (e.g. Render) is in place - see README.md "Remote / cloud
+// relay mode".
+const PULSE_RELAY_TEST_URL = "https://toolkit-expand-abstract-trustee.trycloudflare.com";
+const PULSE_RELAY_TEST_API_KEY = "pulsetest2026";
+const PULSE_RELAY_TEST_DEVICE_ID = "demo-iphone-1";
 
 const PROMPT_GROUPS = [
   {
@@ -663,11 +676,75 @@ function LogTab({ theme, logs, savedReports, crashes, bridgeOnline }) {
   );
 }
 
+function AskCommandBox({ theme }) {
+  const [text, setText] = useState("");
+  const [status, setStatus] = useState("idle"); // idle | sending | sent | error
+  const relayReady = isRelayConfigured();
+
+  async function submit() {
+    const trimmed = text.trim();
+    if (!trimmed || status === "sending") return;
+    setStatus("sending");
+    try {
+      await sendUserCommand(trimmed);
+      setStatus("sent");
+      setText("");
+      setTimeout(() => setStatus("idle"), 2500);
+    } catch (err) {
+      setStatus("error");
+      Alert.alert("Couldn't send command", err.message);
+    }
+  }
+
+  return (
+    <Card theme={theme} style={{ marginBottom: 24 }}>
+      <Text style={[styles.recordTitle, { color: theme.text }]}>Send a command</Text>
+      <Text style={[styles.actionSubtitle, { color: theme.textMuted, marginTop: 2, marginBottom: 12 }]}>
+        Type a bug or request in your own words - it goes straight to the automated fix pipeline, which opens a
+        PR if it finds something actionable.
+      </Text>
+      <TextInput
+        value={text}
+        onChangeText={setText}
+        placeholder='e.g. "The dashboard sync keeps timing out, please fix it"'
+        placeholderTextColor={theme.textFaint}
+        multiline
+        editable={relayReady && status !== "sending"}
+        style={[
+          styles.commandInput,
+          { backgroundColor: theme.track, color: theme.text, borderColor: theme.border },
+        ]}
+      />
+      <TouchableOpacity
+        activeOpacity={0.8}
+        disabled={!relayReady || !text.trim() || status === "sending"}
+        onPress={submit}
+        style={[
+          styles.commandSendButton,
+          { backgroundColor: theme.accent, opacity: !relayReady || !text.trim() ? 0.5 : 1 },
+        ]}
+      >
+        {status === "sending" ? (
+          <ActivityIndicator color="#fff" size="small" />
+        ) : (
+          <Text style={styles.commandSendButtonText}>{status === "sent" ? "Sent ✓" : "Send"}</Text>
+        )}
+      </TouchableOpacity>
+      {!relayReady && (
+        <Text style={[styles.actionSubtitle, { color: theme.textFaint, marginTop: 8 }]}>
+          Relay isn't configured on this device, so this can't reach the auto-fix pipeline yet.
+        </Text>
+      )}
+    </Card>
+  );
+}
+
 function AskIdeTab({ theme, bridgeOnline }) {
   return (
     <>
       <ScreenHeader theme={theme} title="Ask IDE" subtitle="Tap to copy a prompt for your MCP client" bridgeOnline={bridgeOnline} />
-      <View style={{ marginTop: 20 }}>
+      <AskCommandBox theme={theme} />
+      <View style={{ marginTop: 4 }}>
         {PROMPT_GROUPS.map((group) => (
           <View key={group.label} style={{ marginBottom: 20 }}>
             <Text style={[styles.promptGroupLabel, { color: theme.textFaint }]}>{group.label}</Text>
@@ -699,6 +776,11 @@ function App() {
 
   useEffect(() => {
     if (__DEV__) startPulseServer();
+    configurePulseRelay({
+      url: PULSE_RELAY_TEST_URL,
+      apiKey: PULSE_RELAY_TEST_API_KEY,
+      deviceId: PULSE_RELAY_TEST_DEVICE_ID,
+    });
     setCurrentRoute(activeTabMeta.routeId);
   }, []);
 
@@ -949,6 +1031,22 @@ const styles = StyleSheet.create({
   promptTool: { fontSize: 10, marginTop: 4, fontVariant: ["tabular-nums"] },
   copyButton: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, paddingVertical: 6, paddingHorizontal: 12 },
   copyButtonText: { fontSize: 12, fontWeight: "700" },
+  commandInput: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    padding: 12,
+    fontSize: 14,
+    minHeight: 72,
+    textAlignVertical: "top",
+  },
+  commandSendButton: {
+    marginTop: 10,
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  commandSendButtonText: { color: "#fff", fontSize: 14, fontWeight: "700" },
   tabBar: {
     flexDirection: "row",
     borderTopWidth: StyleSheet.hairlineWidth,

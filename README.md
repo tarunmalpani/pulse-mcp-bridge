@@ -144,8 +144,36 @@ Every crash automatically includes a **breadcrumb trail** — the last ~20 thing
 
 This is what makes `get_mobile_crash_logs`/`diagnose_mobile_error` answer *"why did my app crash"* for a crash that happened five minutes ago and killed the app, not just one you're actively watching for.
 
+## Remote / cloud relay mode
+
+Everything above requires the phone and this MCP server to be on the **same Wi-Fi network** (`MOBILE_PHONE_IP`). If your tester/client's device is somewhere else entirely — a different city, a different network, cellular data — use the relay instead: the phone pushes its state to an always-on hosted service, and `index.js` reads from that service over HTTPS instead of a LAN IP.
+
+**When to use it:** the developer and the device are not on the same network, or you want crashes/logs captured even when no one's MCP client happens to be running at that moment.
+
+**Setup:**
+1. Deploy `relay-server/` somewhere always-on (Render is the simplest — see `relay-server/README.md`), setting `PULSE_API_KEY` to a random secret.
+2. In the mobile app, alongside `startPulseServer()`, call:
+   ```js
+   import { configurePulseRelay } from "./pulseServer";
+   configurePulseRelay({
+     url: "https://your-relay.onrender.com",
+     apiKey: "the-same-PULSE_API_KEY-as-the-relay",
+     deviceId: "some-stable-id-for-this-device", // e.g. a UUID you generate once and persist
+   });
+   ```
+3. On the MCP server side, set `PULSE_RELAY_URL`, `PULSE_API_KEY`, and `PULSE_DEVICE_ID` (matching the values above) instead of `MOBILE_PHONE_IP` — see the `relay_mode_example` block in `mcp-config.example.json`.
+
+All 9 tools work identically in relay mode — `index.js`'s tool handlers don't know or care whether they're talking to the phone directly or through the relay.
+
+**Security note:** the relay is internet-exposed, unlike the trusted-LAN-only local bridge. Every request requires the `x-pulse-api-key` header; treat that key like a password (don't commit it, rotate it if it leaks). There's no per-device auth beyond the shared key and `deviceId`, so this is meant for a small number of trusted testers/devices, not a public multi-tenant service.
+
+**Automated crash-fix pipeline (optional):** the relay can also automatically kick off a Claude Code agent on every new crash or bug report, which opens a PR with a candidate fix for you to review. This is opt-in — set `GITHUB_TOKEN`/`GITHUB_REPO` on the relay and add `ANTHROPIC_API_KEY` to this repo's GitHub Actions secrets to enable it (see `.github/workflows/auto-fix-crash.yml` and `relay-server/lib/githubDispatch.js`). Leave those unset and the relay works exactly the same, just without the auto-fix step.
+
 ## Environment variables
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `MOBILE_PHONE_IP` | `192.168.1.50` | IP address of the phone/mock server running the HTTP bridge |
+| `MOBILE_PHONE_IP` | `192.168.1.50` | IP address of the phone/mock server running the HTTP bridge (local Wi-Fi mode only) |
+| `PULSE_RELAY_URL` | unset | Base URL of the relay server (see "Remote / cloud relay mode"); when set, this replaces `MOBILE_PHONE_IP` entirely |
+| `PULSE_API_KEY` | unset | Shared secret sent as `x-pulse-api-key` to the relay (must match the relay's own `PULSE_API_KEY`) |
+| `PULSE_DEVICE_ID` | unset | Which device's state to read from the relay (must match the `deviceId` passed to `configurePulseRelay()` in the app) |
