@@ -167,7 +167,24 @@ All 9 tools work identically in relay mode — `index.js`'s tool handlers don't 
 
 **Security note:** the relay is internet-exposed, unlike the trusted-LAN-only local bridge. Every request requires the `x-pulse-api-key` header; treat that key like a password (don't commit it, rotate it if it leaks). There's no per-device auth beyond the shared key and `deviceId`, so this is meant for a small number of trusted testers/devices, not a public multi-tenant service.
 
-**Automated crash-fix pipeline (optional):** the relay can also automatically kick off a Claude Code agent on every new crash or bug report, which opens a PR with a candidate fix for you to review. This is opt-in — set `GITHUB_TOKEN`/`GITHUB_REPO` on the relay and add `ANTHROPIC_API_KEY` to this repo's GitHub Actions secrets to enable it (see `.github/workflows/auto-fix-crash.yml` and `relay-server/lib/githubDispatch.js`). Leave those unset and the relay works exactly the same, just without the auto-fix step.
+**Automated crash-fix pipeline (optional):** the relay can also automatically kick off a Claude Code agent on every new crash, bug report, or a free-text command typed into the app's "Ask IDE" screen, which opens a PR with a candidate fix for you to review. This is opt-in — set `GITHUB_TOKEN`/`GITHUB_REPO` on the relay and add `ANTHROPIC_API_KEY` to this repo's GitHub Actions secrets to enable it (see `.github/workflows/auto-fix-crash.yml`, `relay-server/lib/githubDispatch.js`, and `mobile-app-server.js`'s `sendUserCommand()`). Leave those unset and the relay works exactly the same, just without the auto-fix step.
+
+## Current status / progress
+
+Snapshot of what's built and verified so far, and what's still open.
+
+**Working end-to-end (verified live):**
+- Cloud relay mode — status/logs/crashes/reports/session pushed from a real device through a cloudflared tunnel and read back via `index.js`, including with the phone on cellular data (proves the cross-network case).
+- On-demand screenshot round trip (enqueue → phone poll → fulfill → response).
+- The "Ask IDE" command box in the demo app → relay's `/devices/:id/user-commands` endpoint → GitHub `repository_dispatch` → the `auto-fix-crash.yml` workflow actually running (checkout, branch creation, Claude Code CLI install all succeed).
+
+**Blocked — pending a funded Anthropic API key:** the workflow's `claude -p` step needs `ANTHROPIC_API_KEY` in this repo's GitHub Actions secrets. A key was added but the run failed with `Credit balance is too low` — the Console account behind that key has no billing/credits yet. Add a payment method / credits at `https://console.anthropic.com/settings/billing` (or provide a different key with balance), then re-trigger a test command to confirm a PR gets opened.
+
+**Explored and abandoned:** using `ant auth login` (OAuth tied to a Claude Pro/Max plan) instead of a billed API key, to avoid CI usage counting against API credits. Works for interactive login, but isn't a supported flow for unattended CI (refresh-token handling, and it ties a personal account credential to the pipeline) — reverted in favor of a plain `ANTHROPIC_API_KEY` secret.
+
+**Not yet done:**
+- Deploying `relay-server/` to Render (or another always-on host) — it's currently only verified running locally + tunneled, not on permanent infrastructure.
+- Per-device repo mapping for the auto-fix pipeline, needed if this bridge is ever used across more than one project's repo (currently hardcoded to `tarunmalpani/pulse-mcp-bridge`).
 
 ## Environment variables
 
