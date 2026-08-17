@@ -12,15 +12,15 @@ services:
       # what you'll use as X-Pulse-Relay-Api-Key / relayApiKey.
       - key: PULSE_API_KEY
         generateValue: true
-      - key: DB_PATH
-        value: /data/relay.db
+      # No persistent disk on the free plan (Render doesn't support disks
+      # there), so DB_PATH is left at its default (a file inside the
+      # container's own ephemeral filesystem). This means crash/log history
+      # is wiped on every redeploy or restart - fine for trying this out.
+      # If you upgrade to a paid Render plan later, add a disk and set
+      # DB_PATH=/data/relay.db to persist data across restarts.
       # Optional - only needed for the Phase 2 automated crash-fix pipeline.
       # Leave blank in the Render dashboard to skip Phase 2 entirely.
       - key: GITHUB_TOKEN
         sync: false
       - key: GITHUB_REPO
         sync: false
-    disk:
-      name: relay-data
-      mountPath: /data
-      sizeGB: 1

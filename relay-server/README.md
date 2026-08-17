@@ -15,7 +15,7 @@ node server.js
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/tarunmalpani/pulse-mcp-bridge)
 
-This repo includes a `render.yaml` Blueprint at its root, so the button above sets up everything in one go: the web service, the `PULSE_API_KEY` secret (auto-generated — no need to invent one), and the persistent disk for the SQLite file. All you do afterward:
+This repo includes a `render.yaml` Blueprint at its root, so the button above sets up everything in one go: the web service and the `PULSE_API_KEY` secret (auto-generated — no need to invent one). It deploys on Render's **free** plan, which means no persistent disk (Render doesn't support disks on free services) — crash/log history is wiped on every redeploy or restart. Fine for trying this out; upgrade to a paid plan and add a disk (see "Manual setup" below) if you need history to survive restarts. All you do afterward:
 
 1. Click the button (or paste the repo URL into Render → **New → Blueprint**).
 2. Render provisions it. Once live, copy the auto-generated `PULSE_API_KEY` value from the service's **Environment** tab — that's what you'll use as `relayApiKey` in the mobile app and `X-Pulse-Relay-Api-Key` in any hosted MCP config.
