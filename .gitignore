@@ -3,4 +3,4 @@ node_modules/
 .DS_Store
 .mcp.json
 mcphub-plugin/*.zip
-docs/share-with-friend.filled.md
+docs/share-with-friend.md
