@@ -214,7 +214,18 @@ Verified live: sent a real test command from a curl call standing in for the UI,
 
 No source code, no per-person setup work from the repo owner beyond deploying `hosted-server.js` once.
 
-**Not yet done:** `hosted-server.js` itself hasn't been deployed anywhere real yet (only verified locally, same caveat as the relay in §4) — deploying it (e.g. also via Render, plain Node web service, `HOSTED_ACCESS_KEY` env var) is the next step before this is actually usable by anyone outside this machine.
+### Deployed and verified live (this session)
+
+`hosted-server.js` is deployed on Render as a manual Web Service (root directory blank/repo root, build `npm install`, start `node hosted-server.js`, env var `HOSTED_ACCESS_KEY` set) at:
+
+- **URL**: `https://pulse-mcp-bridge.onrender.com/mcp`
+- **Access key**: `33084e448c80da8879dfdc59ac9637a27de7e810232a092a` (treat like a password — this is what gates who can reach the hosted server at all, separate from each caller's own relay credentials)
+
+Verified end-to-end against this live deployment: health check, auth gate (401 with no/wrong key), header validation (400 on missing relay headers), and a full real tool call (`get_mobile_device_status`, `check_mobile_connection`) round-tripping through a temporary relay+cloudflared tunnel — confirmed correct data returned through the live Render URL.
+
+**Quirk observed during deploy:** right after a deploy finishes, requests can flip between a working response and a generic `404 Not Found` (not Express's own 404 format) for roughly a minute — looks like Render briefly running old+new instances during the transition. It self-resolves; if you see this right after deploying, just retry after ~30-60s rather than assuming something's broken.
+
+**Not yet done:** nothing outstanding for this specific piece — this is the one item from the original next-steps list that's now complete. `render.yaml` still only covers `relay-server/` (each friend's own relay); `hosted-server.js` was deployed manually since it's a one-time deploy by the repo owner, not something each friend repeats.
 
 ---
 
@@ -222,7 +233,7 @@ No source code, no per-person setup work from the repo owner beyond deploying `h
 
 **Phase 1 (relay) next steps:**
 1. Deploy `relay-server/` to Render (or equivalent) for a permanent, always-on relay URL — replace the temporary cloudflared reference in `demo-app/App.js`'s `PULSE_RELAY_TEST_*` constants with the real deployed values, and remove the "TEMPORARY" comment/config once done.
-2. Deploy `hosted-server.js` (see §9) so the "share without sharing source" flow is actually usable, not just locally verified.
+2. ~~Deploy `hosted-server.js`~~ — **done** (see §9): live at `https://pulse-mcp-bridge.onrender.com/mcp`, verified end-to-end.
 
 **Phase 2 (Anthropic + GitHub auto-fix pipeline) next steps — pick up only when ready to move to Phase 2:**
 1. Add billing/credits to the Anthropic Console account backing the `ANTHROPIC_API_KEY` secret, then re-verify the auto-fix pipeline produces an actual PR.
