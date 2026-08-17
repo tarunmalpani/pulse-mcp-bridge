@@ -14,6 +14,13 @@ For deep implementation detail beyond this summary, see `ARCHITECTURE.md` (origi
 
 **Extended problem it solves (this session's work):** the original design only worked when the phone and the developer's machine shared a Wi-Fi network. This session added a **cloud relay** so the phone and the developer can be on entirely different networks (e.g. a client's device in the USA, developer in India) — plus an **automated fix pipeline** so a crash can turn into a candidate PR without a human having to notice it first.
 
+### Phasing
+
+This session's work splits into two phases:
+
+- **Phase 1 — Cloud relay (done, verified working).** The relay itself (§4): phone ↔ relay ↔ `index.js` over HTTPS, cross-network, tested live on a real device including on cellular data. This phase needs no Anthropic account and no GitHub Actions — it's just the relay + the existing 9 MCP tools working across networks instead of only on LAN.
+- **Phase 2 — Anthropic + GitHub automated fix pipeline (built, wired up, blocked on billing).** Everything that involves an `ANTHROPIC_API_KEY` and GitHub Actions — the automated crash-fix pipeline (§5) and the "Ask IDE" command box that feeds it (§6). This phase is what turns a captured crash/command into an actual PR. It was explicitly discussed and agreed to be treated as a separate, later phase from the core relay — Phase 1 (relay) is usable and complete on its own without ever turning Phase 2 on.
+
 ---
 
 ## 2. Architecture — components and file map
@@ -62,7 +69,7 @@ All 9 work identically whether `index.js` is in local LAN mode or relay mode —
 
 ---
 
-## 4. Cloud relay mode (`relay-server/`) — built this session
+## 4. Cloud relay mode (`relay-server/`) — Phase 1, built this session
 
 **Problem it solves:** the original bridge required the phone and `index.js` to be on the same Wi-Fi. The relay decouples them completely — the phone pushes its state to an always-on HTTPS service; `index.js` reads from that service instead of a LAN IP.
 
@@ -102,7 +109,7 @@ All 9 work identically whether `index.js` is in local LAN mode or relay mode —
 
 ---
 
-## 5. Automated crash-fix pipeline — built this session
+## 5. Automated crash-fix pipeline — Phase 2, built this session
 
 **Problem it solves:** without this, a crash/bug report just sits in `get_mobile_crash_logs` until a human happens to ask about it. This makes the relay proactively kick off a fix attempt.
 
@@ -139,7 +146,7 @@ Verified working end-to-end **except the final step**:
 
 ---
 
-## 6. "Ask IDE" command box — built this session
+## 6. "Ask IDE" command box — Phase 2, built this session
 
 **Problem it solves:** lets a user type a plain-English bug/request directly into the app (rather than waiting for an automatic crash) and have it flow into the same fix pipeline.
 
@@ -187,7 +194,10 @@ Verified live: sent a real test command from a curl call standing in for the UI,
 
 ## 9. Suggested next steps (in likely priority order)
 
-1. Add billing/credits to the Anthropic Console account backing the `ANTHROPIC_API_KEY` secret, then re-verify the auto-fix pipeline produces an actual PR.
-2. Deploy `relay-server/` to Render (or equivalent) for a permanent, always-on relay URL — replace the temporary cloudflared reference in `demo-app/App.js`'s `PULSE_RELAY_TEST_*` constants with the real deployed values, and remove the "TEMPORARY" comment/config once done.
+**Phase 1 (relay) next steps:**
+1. Deploy `relay-server/` to Render (or equivalent) for a permanent, always-on relay URL — replace the temporary cloudflared reference in `demo-app/App.js`'s `PULSE_RELAY_TEST_*` constants with the real deployed values, and remove the "TEMPORARY" comment/config once done.
+
+**Phase 2 (Anthropic + GitHub auto-fix pipeline) next steps — pick up only when ready to move to Phase 2:**
+2. Add billing/credits to the Anthropic Console account backing the `ANTHROPIC_API_KEY` secret, then re-verify the auto-fix pipeline produces an actual PR.
 3. If this is meant to serve more than one app/repo, design the per-device → target-repo mapping described in §5.
 4. Consider a rate/volume cap on the auto-fix dispatch beyond the existing 1-hour de-dupe.
