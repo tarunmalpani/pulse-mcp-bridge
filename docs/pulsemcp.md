@@ -43,6 +43,9 @@ mobile-app-server.js         ◀───HTTP (LAN)────▶  fetchFromPho
 | **Demo/test app** | `demo-app/` | Full Expo app exercising all tools + the relay + the "Ask IDE" command box. Used throughout this session for live device testing (real iPhone, "Tarun Malpani iphone", UDID `00008110-001924613EBA401E`). |
 | **Cloud relay** | `relay-server/` (Express + SQLite) | Optional always-on intermediary. Phone pushes to it; `index.js` reads from it. See §4. |
 | **Automated fix pipeline** | `.github/workflows/auto-fix-crash.yml`, `.github/scripts/prepare-auto-fix.mjs`, `relay-server/lib/githubDispatch.js` | Fires on new crash/report/command; runs headless Claude Code in CI; opens a PR. See §5. |
+| **Shared tool logic** | `lib/mcpToolServer.js` | The 9 tool definitions + handlers, factored out of `index.js` so both it and `hosted-server.js` build an MCP `Server` from one source of truth. Added in a later part of this session — see §10. |
+| **Hosted multi-tenant MCP server** | `hosted-server.js` | Same 9 tools over HTTP instead of stdio; lets you share the tool *without* sharing this repo's source. See §10. |
+| **One-click relay deploy** | `render.yaml` (repo root) | Render Blueprint — the "Deploy to Render" button in `relay-server/README.md` uses this to auto-provision the service, disk, and a generated `PULSE_API_KEY` in one step. See §10. |
 | **Mock phone** | `mock-phone.js` | Fakes `/status`/`/logs` for local testing without a real device. |
 
 ---
@@ -192,12 +195,36 @@ Verified live: sent a real test command from a curl call standing in for the UI,
 
 ---
 
-## 9. Suggested next steps (in likely priority order)
+## 9. Sharing without sharing source (`hosted-server.js`) — Phase 1, built this session
+
+**Problem it solves:** the user wanted to give a friend access to the MCP tools (against the friend's own app/relay) without handing over this repo's source code, and without the friend needing anything from the user beyond a URL + key. Plain `index.js` doesn't fit — it's spawned locally over stdio, requires the source file, and is single-tenant (one fixed relay config via env vars).
+
+**What was built:**
+- **`lib/mcpToolServer.js`** — the 9 tool definitions + all handler logic, extracted out of `index.js` into `createPulseServer({ fetchFromPhone, unreachableMessage, getTodayGitCommits })`, a factory that returns a configured MCP `Server`. `index.js` was refactored to call this factory instead of inlining everything — verified byte-for-byte identical behavior via a real MCP client test (same 9 tools, same relay round trip) before and after the refactor.
+- **`hosted-server.js`** — a new Express app exposing the same 9 tools over **`StreamableHTTPServerTransport`** (from `@modelcontextprotocol/sdk`, stateless mode: `sessionIdGenerator: undefined`, `enableJsonResponse: true`) instead of stdio. Deployed once, reused by anyone.
+  - **Multi-tenant per request, not per deployment:** each incoming `POST /mcp` reads `X-Pulse-Relay-Url` / `X-Pulse-Relay-Api-Key` / `X-Pulse-Device-Id` from that request's own headers (not server env vars) and builds a fresh `fetchFromPhone` scoped to just that caller. A separate `Authorization: Bearer <HOSTED_ACCESS_KEY>` header gates who can reach the server at all, independent of each caller's own relay credentials. Nothing is persisted between requests — a new `Server`+transport pair is created per request and closed on `res.on("close")`.
+  - Verified live: two simultaneous "callers" with completely different relay ports/keys/deviceIds (one iOS/HomeScreen, one Android/SettingsScreen) got back their own isolated data with zero cross-talk, through the same running hosted-server.js process.
+  - `get_standup_snapshot`'s git-log feature returns a fixed "not available in hosted mode" message here (reading the *hosted server's* git history would be meaningless for a remote multi-tenant caller) — this is the one behavioral difference from `index.js`.
+- **`render.yaml`** (repo root) — a Render Blueprint for `relay-server/` (`rootDir: relay-server`, auto-generated `PULSE_API_KEY` via `generateValue: true`, a persistent disk at `/data`, optional `GITHUB_TOKEN`/`GITHUB_REPO` via `sync: false`). Lets `relay-server/README.md`'s new "Deploy to Render" button provision the whole relay in one click instead of the manual multi-step Render setup — this was specifically to reduce the number of steps a friend/third party needs to do to get their own isolated relay running.
+
+**What a friend needs to do now** (see root `README.md` → "Sharing this with someone else, without sharing the source code"):
+1. Click **Deploy to Render** for their own relay (one click, thanks to `render.yaml`).
+2. Add `mobile-app-server.js` to their own app + call `configurePulseRelay()` with their own relay's URL/key + a deviceId of their choice.
+3. Point their IDE's MCP config at the hosted `hosted-server.js` URL (deployed by the pulse-mcp-bridge owner, not the friend) with the 4 headers above.
+
+No source code, no per-person setup work from the repo owner beyond deploying `hosted-server.js` once.
+
+**Not yet done:** `hosted-server.js` itself hasn't been deployed anywhere real yet (only verified locally, same caveat as the relay in §4) — deploying it (e.g. also via Render, plain Node web service, `HOSTED_ACCESS_KEY` env var) is the next step before this is actually usable by anyone outside this machine.
+
+---
+
+## 10. Suggested next steps (in likely priority order)
 
 **Phase 1 (relay) next steps:**
 1. Deploy `relay-server/` to Render (or equivalent) for a permanent, always-on relay URL — replace the temporary cloudflared reference in `demo-app/App.js`'s `PULSE_RELAY_TEST_*` constants with the real deployed values, and remove the "TEMPORARY" comment/config once done.
+2. Deploy `hosted-server.js` (see §9) so the "share without sharing source" flow is actually usable, not just locally verified.
 
 **Phase 2 (Anthropic + GitHub auto-fix pipeline) next steps — pick up only when ready to move to Phase 2:**
-2. Add billing/credits to the Anthropic Console account backing the `ANTHROPIC_API_KEY` secret, then re-verify the auto-fix pipeline produces an actual PR.
-3. If this is meant to serve more than one app/repo, design the per-device → target-repo mapping described in §5.
-4. Consider a rate/volume cap on the auto-fix dispatch beyond the existing 1-hour de-dupe.
+1. Add billing/credits to the Anthropic Console account backing the `ANTHROPIC_API_KEY` secret, then re-verify the auto-fix pipeline produces an actual PR.
+2. If this is meant to serve more than one app/repo, design the per-device → target-repo mapping described in §5.
+3. Consider a rate/volume cap on the auto-fix dispatch beyond the existing 1-hour de-dupe.

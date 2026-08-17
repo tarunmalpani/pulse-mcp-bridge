@@ -151,7 +151,7 @@ Everything above requires the phone and this MCP server to be on the **same Wi-F
 **When to use it:** the developer and the device are not on the same network, or you want crashes/logs captured even when no one's MCP client happens to be running at that moment.
 
 **Setup:**
-1. Deploy `relay-server/` somewhere always-on (Render is the simplest — see `relay-server/README.md`), setting `PULSE_API_KEY` to a random secret.
+1. Deploy `relay-server/` somewhere always-on — click **Deploy to Render** in `relay-server/README.md` for a one-click setup (auto-generates `PULSE_API_KEY` and provisions the persistent disk via the included `render.yaml`), or follow the manual steps there.
 2. In the mobile app, alongside `startPulseServer()`, call:
    ```js
    import { configurePulseRelay } from "./pulseServer";
@@ -168,6 +168,34 @@ All 9 tools work identically in relay mode — `index.js`'s tool handlers don't 
 **Security note:** the relay is internet-exposed, unlike the trusted-LAN-only local bridge. Every request requires the `x-pulse-api-key` header; treat that key like a password (don't commit it, rotate it if it leaks). There's no per-device auth beyond the shared key and `deviceId`, so this is meant for a small number of trusted testers/devices, not a public multi-tenant service.
 
 **Automated crash-fix pipeline (optional):** the relay can also automatically kick off a Claude Code agent on every new crash, bug report, or a free-text command typed into the app's "Ask IDE" screen, which opens a PR with a candidate fix for you to review. This is opt-in — set `GITHUB_TOKEN`/`GITHUB_REPO` on the relay and add `ANTHROPIC_API_KEY` to this repo's GitHub Actions secrets to enable it (see `.github/workflows/auto-fix-crash.yml`, `relay-server/lib/githubDispatch.js`, and `mobile-app-server.js`'s `sendUserCommand()`). Leave those unset and the relay works exactly the same, just without the auto-fix step.
+
+## Sharing this with someone else, without sharing the source code
+
+If someone else (a friend, another team) wants to use the MCP tools against their own app, but you don't want to hand them this repo, deploy `hosted-server.js` instead of giving them `index.js`:
+
+- It's the same 9 tools, but served over HTTP (`StreamableHTTPServerTransport`) instead of stdio, so it can be deployed once and reused by anyone you give the URL to — no code, no local install on their end.
+- It's **multi-tenant**: each caller supplies their own relay URL/key/deviceId via request headers (`X-Pulse-Relay-Url`, `X-Pulse-Relay-Api-Key`, `X-Pulse-Device-Id`), plus a shared `Authorization: Bearer <HOSTED_ACCESS_KEY>` just to reach the server at all. Nothing is persisted or shared between callers — see `hosted-server.js`'s top comment for the exact contract.
+- Each person still needs their **own** relay (deployed with the one-click Render button above) and their own `mobile-app-server.js` in their own app — that part can't be skipped, since it's what exposes *their* app's data, but it requires zero source code from you, just the URL + access key.
+
+Deploy it the same way as the relay (Node service, set `HOSTED_ACCESS_KEY`), then their IDE's MCP config is just:
+
+```json
+{
+  "mcpServers": {
+    "pulse-mcp": {
+      "url": "https://your-hosted-server.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer <HOSTED_ACCESS_KEY>",
+        "X-Pulse-Relay-Url": "https://their-own-relay.onrender.com",
+        "X-Pulse-Relay-Api-Key": "their-own-relay-PULSE_API_KEY",
+        "X-Pulse-Device-Id": "their-own-deviceId"
+      }
+    }
+  }
+}
+```
+
+Note: `get_standup_snapshot`'s git-log feature returns a "not available" message in hosted mode, since "today's local commits" has no meaning for a shared remote server reading its own git history.
 
 ## Current status / progress
 

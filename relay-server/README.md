@@ -11,7 +11,18 @@ cp .env.example .env   # then edit PULSE_API_KEY
 node server.js
 ```
 
-## Deploy to Render
+## Deploy to Render — one click
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/tarunmalpani/pulse-mcp-bridge)
+
+This repo includes a `render.yaml` Blueprint at its root, so the button above sets up everything in one go: the web service, the `PULSE_API_KEY` secret (auto-generated — no need to invent one), and the persistent disk for the SQLite file. All you do afterward:
+
+1. Click the button (or paste the repo URL into Render → **New → Blueprint**).
+2. Render provisions it. Once live, copy the auto-generated `PULSE_API_KEY` value from the service's **Environment** tab — that's what you'll use as `relayApiKey` in the mobile app and `X-Pulse-Relay-Api-Key` in any hosted MCP config.
+3. Your relay's public URL (`https://<name>.onrender.com`) is your `PULSE_RELAY_URL` / `relayUrl`.
+4. (Optional, Phase 2 only) Fill in `GITHUB_TOKEN` / `GITHUB_REPO` in the Environment tab if you want the automated crash-fix pipeline — leave them blank otherwise.
+
+### Manual setup (if you'd rather not use the Blueprint)
 
 1. Push this repo to GitHub (already done, if you're reading this from a clone).
 2. In Render: **New → Web Service**, connect this repo, set the root directory to `relay-server/`.

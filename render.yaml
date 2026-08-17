@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: pulse-mcp-relay
+    runtime: node
+    rootDir: relay-server
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      # Auto-generated on deploy - no manual step. Copy this value from the
+      # Render dashboard's Environment tab once the service is live; it's
+      # what you'll use as X-Pulse-Relay-Api-Key / relayApiKey.
+      - key: PULSE_API_KEY
+        generateValue: true
+      - key: DB_PATH
+        value: /data/relay.db
+      # Optional - only needed for the Phase 2 automated crash-fix pipeline.
+      # Leave blank in the Render dashboard to skip Phase 2 entirely.
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_REPO
+        sync: false
+    disk:
+      name: relay-data
+      mountPath: /data
+      sizeGB: 1
