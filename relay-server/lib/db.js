@@ -39,6 +39,20 @@ export function getDeviceState(deviceId, kind) {
   return row ? JSON.parse(row.data) : null;
 }
 
+/** Like getDeviceState, but also returns when that blob was last pushed - used to detect a stale/disconnected device. */
+export function getDeviceStateMeta(deviceId, kind) {
+  const row = db.prepare(`SELECT data, updated_at FROM device_state WHERE device_id = ? AND kind = ?`).get(deviceId, kind);
+  return row ? { data: JSON.parse(row.data), updatedAt: row.updated_at } : null;
+}
+
+/** Every device that has ever pushed a status, most recently seen first. */
+export function listDevices() {
+  const rows = db
+    .prepare(`SELECT device_id, updated_at FROM device_state WHERE kind = 'status' ORDER BY updated_at DESC`)
+    .all();
+  return rows.map((row) => ({ deviceId: row.device_id, lastSeenAt: row.updated_at }));
+}
+
 /**
  * Returns true (and records the dispatch) if this hash hasn't fired within the
  * cooldown window; returns false if a dispatch for the same hash already fired

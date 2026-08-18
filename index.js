@@ -11,13 +11,13 @@ const PHONE_URL = `http://${PHONE_IP}:8080`;
 // Optional remote/cross-network mode: when PULSE_RELAY_URL is set, talk to the
 // hosted relay (see relay-server/) instead of the phone directly over LAN.
 // This lets the phone and this MCP server be on entirely different networks.
-const RELAY_URL = process.env.PULSE_RELAY_URL;
-const RELAY_API_KEY = process.env.PULSE_API_KEY;
-const RELAY_DEVICE_ID = process.env.PULSE_DEVICE_ID;
+const PULSE_RELAY_URL = process.env.PULSE_RELAY_URL;
+const PULSE_API_KEY = process.env.PULSE_API_KEY;
+const PULSE_DEVICE_ID = process.env.PULSE_DEVICE_ID;
 
-const TARGET_BASE_URL = RELAY_URL ? `${RELAY_URL}/devices/${RELAY_DEVICE_ID}` : PHONE_URL;
-const TARGET_DESCRIPTION = RELAY_URL
-  ? `relay ${RELAY_URL} (device "${RELAY_DEVICE_ID}")`
+const TARGET_BASE_URL = PULSE_RELAY_URL ? `${PULSE_RELAY_URL}/devices/${PULSE_DEVICE_ID}` : PHONE_URL;
+const TARGET_DESCRIPTION = PULSE_RELAY_URL
+  ? `relay ${PULSE_RELAY_URL} (device "${PULSE_DEVICE_ID}")`
   : `phone at ${PHONE_URL}`;
 
 /**
@@ -41,18 +41,33 @@ function getTodayGitCommits() {
 
 /** Wraps a GET request to the mobile bridge (or relay, in remote mode) with a short timeout. */
 async function fetchFromPhone(path) {
-  const headers = RELAY_URL ? { "x-pulse-api-key": RELAY_API_KEY } : undefined;
+  const headers = PULSE_RELAY_URL ? { "x-pulse-api-key": PULSE_API_KEY } : undefined;
   const response = await axios.get(`${TARGET_BASE_URL}${path}`, { timeout: 3000, headers });
   return response.data;
 }
 
 function unreachableMessage() {
-  return RELAY_URL
+  return PULSE_RELAY_URL
     ? `Could not reach ${TARGET_DESCRIPTION}. Make sure the relay is running and the device ID/API key are correct.`
     : `Mobile device at ${PHONE_URL} is unreachable. Make sure the app is running and on the same Wi-Fi.`;
 }
 
-const server = createPulseServer({ fetchFromPhone, unreachableMessage, getTodayGitCommits });
+/** Lists all devices known to the relay. Only meaningful in relay mode - there's no equivalent concept when talking directly to one phone over LAN. */
+async function fetchDeviceList() {
+  if (!PULSE_RELAY_URL) return null;
+  const response = await axios.get(`${PULSE_RELAY_URL}/devices`, {
+    timeout: 3000,
+    headers: { "x-pulse-api-key": PULSE_API_KEY },
+  });
+  return response.data.devices;
+}
+
+const server = createPulseServer({
+  fetchFromPhone,
+  unreachableMessage,
+  getTodayGitCommits,
+  fetchDeviceList: PULSE_RELAY_URL ? fetchDeviceList : undefined,
+});
 
 async function main() {
   const transport = new StdioServerTransport();

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import express from "express";
-import { putDeviceState, getDeviceState } from "./lib/db.js";
+import { putDeviceState, getDeviceState, getDeviceStateMeta, listDevices } from "./lib/db.js";
 import { enqueueCommand, drainPendingCommands, fulfillCommand } from "./lib/commandQueue.js";
 import { maybeDispatch, dispatchNow } from "./lib/githubDispatch.js";
 
@@ -25,6 +25,11 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// The phone pushes a status heartbeat every 20s (RELAY_HEARTBEAT_MS in
+// pulseServer.js). Two missed heartbeats is a solid signal the app closed or
+// the device dropped off the network, rather than just one slow/dropped push.
+const STALE_MS = 45_000;
 
 const DEFAULTS = {
   status: null,
@@ -59,7 +64,35 @@ function registerStateRoutes(kind, { onPush } = {}) {
   });
 }
 
-registerStateRoutes("status");
+// Status gets its own routes (rather than registerStateRoutes) so the GET
+// can stamp on `online`/`lastSeenAt` computed from when it was last pushed -
+// otherwise a device that closed hours ago still reads back as "online"
+// forever, since it's just replaying the last snapshot it ever received.
+app.post("/devices/:deviceId/status", (req, res) => {
+  const { deviceId } = req.params;
+  putDeviceState(deviceId, "status", req.body);
+  res.json({ ok: true });
+});
+
+app.get("/devices/:deviceId/status", (req, res) => {
+  const { deviceId } = req.params;
+  const meta = getDeviceStateMeta(deviceId, "status");
+  if (!meta) {
+    return res.status(404).json({ error: `No status pushed yet for device "${deviceId}".` });
+  }
+  const online = Date.now() - Date.parse(meta.updatedAt) < STALE_MS;
+  res.json({ ...meta.data, online, lastSeenAt: meta.updatedAt, status: online ? meta.data.status : "offline" });
+});
+
+/** Every device that has ever connected, most recently seen first - lets a caller discover a new deviceId instead of guessing one. */
+app.get("/devices", (req, res) => {
+  const devices = listDevices().map((device) => ({
+    ...device,
+    online: Date.now() - Date.parse(device.lastSeenAt) < STALE_MS,
+  }));
+  res.json({ devices });
+});
+
 registerStateRoutes("logs");
 registerStateRoutes("reports");
 registerStateRoutes("session");

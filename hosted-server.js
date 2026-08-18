@@ -71,9 +71,17 @@ app.post("/mcp", async (req, res) => {
     return "Not available in hosted mode - this tool reads local git history from the machine running the MCP server, which has no meaning for a shared remote service.";
   }
 
+  async function fetchDeviceList() {
+    const response = await axios.get(`${String(relayUrl).replace(/\/$/, "")}/devices`, {
+      timeout: 8000,
+      headers: { "x-pulse-api-key": relayApiKey },
+    });
+    return response.data.devices;
+  }
+
   // Stateless: a fresh Server + transport per request, scoped to this
   // caller's own relay config. Nothing here is retained after the response.
-  const server = createPulseServer({ fetchFromPhone, unreachableMessage, getTodayGitCommits });
+  const server = createPulseServer({ fetchFromPhone, unreachableMessage, getTodayGitCommits, fetchDeviceList });
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
 
   res.on("close", () => {
